@@ -2,3 +2,8 @@ node_modules
 .nyc_output
 .bak
 .env
+.secrets
+temp-browser-profile/
+*_tokens.json
+*.log
+*.tmp
