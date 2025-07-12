@@ -7,11 +7,45 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 // Import existing OnStar functionality
 const OnStar = require('onstarjs2');
 const _ = require('lodash');
+
+// Load configuration
+let config;
+try {
+    const configPath = path.join(__dirname, 'config.json');
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+} catch (error) {
+    console.error('Failed to load config.json:', error.message);
+    console.log('Using default configuration...');
+    config = {
+        api_endpoints: {
+            climate: { start: true, stop: true },
+            doors: { lock: true, unlock: true },
+            trunk: { lock: true, unlock: true },
+            alert: { lights: false, horn: false, both: false, cancel: true },
+            status: { get: true },
+            location: { get: true },
+            diagnostics: { get: true },
+            charging: { start: true, stop: true, profile_get: true, profile_set: true },
+            system: { health: true, capabilities: true }
+        },
+        security: {
+            require_confirmation: {},
+            rate_limiting: {}
+        },
+        logging: { log_all_requests: false, log_disabled_attempts: true },
+        notifications: {
+            disabled_endpoint_message: "This endpoint has been disabled for safety reasons.",
+            confirmation_required_message: "This action requires confirmation. Add 'confirm=true' to your request body."
+        }
+    };
+}
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -62,6 +96,80 @@ function authenticateApiKey(req, res, next) {
     next();
 }
 
+// Endpoint availability middleware
+function checkEndpointEnabled(category, action) {
+    return (req, res, next) => {
+        const isEnabled = config.api_endpoints[category] && config.api_endpoints[category][action];
+        
+        if (!isEnabled) {
+            // Log disabled attempt if configured
+            if (config.logging && config.logging.log_disabled_attempts) {
+                console.log(`[DISABLED] ${new Date().toISOString()} - ${req.method} ${req.path} - IP: ${req.ip}`);
+                logToFile(`[DISABLED] ${new Date().toISOString()} - ${req.method} ${req.path} - IP: ${req.ip}`);
+            }
+            
+            return res.status(403).json(createResponse(false, 
+                config.notifications.disabled_endpoint_message, 
+                {
+                    endpoint: `${category}.${action}`,
+                    enabled: false,
+                    config_file: 'config.json'
+                }
+            ));
+        }
+        
+        next();
+    };
+}
+
+// Confirmation required middleware
+function requireConfirmation(actionKey) {
+    return (req, res, next) => {
+        const requiresConfirmation = config.security.require_confirmation[actionKey];
+        
+        if (requiresConfirmation && !req.body.confirm) {
+            return res.status(400).json(createResponse(false, 
+                config.notifications.confirmation_required_message,
+                {
+                    action: actionKey,
+                    requires_confirmation: true,
+                    hint: "Add 'confirm: true' to your request body to proceed"
+                }
+            ));
+        }
+        
+        next();
+    };
+}
+
+// Logging function
+function logToFile(message) {
+    if (config.logging && config.logging.log_file) {
+        try {
+            const logDir = path.dirname(config.logging.log_file);
+            if (!fs.existsSync(logDir)) {
+                fs.mkdirSync(logDir, { recursive: true });
+            }
+            fs.appendFileSync(config.logging.log_file, message + '\n');
+        } catch (error) {
+            console.error('Failed to write to log file:', error.message);
+        }
+    }
+}
+
+// Request logging middleware
+function logRequest(req, res, next) {
+    if (config.logging && config.logging.log_all_requests) {
+        const logMessage = `[REQUEST] ${new Date().toISOString()} - ${req.method} ${req.path} - IP: ${req.ip}`;
+        console.log(logMessage);
+        logToFile(logMessage);
+    }
+    next();
+}
+
+// Apply request logging
+app.use(logRequest);
+
 // Create OnStar client
 function createOnStarClient() {
     const config = {
@@ -105,7 +213,7 @@ async function executeOnStarCommand(commandFunc, ...args) {
 // Vehicle Control Endpoints
 
 // POST /climate/start
-app.post('/climate/start', authenticateApiKey, async (req, res) => {
+app.post('/climate/start', authenticateApiKey, checkEndpointEnabled('climate', 'start'), requireConfirmation('climate_start'), async (req, res) => {
     try {
         const { duration_minutes = 10, force = false, temperature } = req.body;
         
@@ -129,7 +237,7 @@ app.post('/climate/start', authenticateApiKey, async (req, res) => {
 });
 
 // POST /climate/stop
-app.post('/climate/stop', authenticateApiKey, async (req, res) => {
+app.post('/climate/stop', authenticateApiKey, checkEndpointEnabled('climate', 'stop'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.cancelStart()
@@ -149,7 +257,7 @@ app.post('/climate/stop', authenticateApiKey, async (req, res) => {
 });
 
 // POST /doors/lock
-app.post('/doors/lock', authenticateApiKey, async (req, res) => {
+app.post('/doors/lock', authenticateApiKey, checkEndpointEnabled('doors', 'lock'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.lockDoor()
@@ -170,7 +278,7 @@ app.post('/doors/lock', authenticateApiKey, async (req, res) => {
 });
 
 // POST /doors/unlock
-app.post('/doors/unlock', authenticateApiKey, async (req, res) => {
+app.post('/doors/unlock', authenticateApiKey, checkEndpointEnabled('doors', 'unlock'), requireConfirmation('doors_unlock'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.unlockDoor()
@@ -191,7 +299,7 @@ app.post('/doors/unlock', authenticateApiKey, async (req, res) => {
 });
 
 // POST /trunk/lock
-app.post('/trunk/lock', authenticateApiKey, async (req, res) => {
+app.post('/trunk/lock', authenticateApiKey, checkEndpointEnabled('trunk', 'lock'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.lockTrunk()
@@ -212,7 +320,7 @@ app.post('/trunk/lock', authenticateApiKey, async (req, res) => {
 });
 
 // POST /trunk/unlock
-app.post('/trunk/unlock', authenticateApiKey, async (req, res) => {
+app.post('/trunk/unlock', authenticateApiKey, checkEndpointEnabled('trunk', 'unlock'), requireConfirmation('trunk_unlock'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.unlockTrunk()
@@ -233,7 +341,7 @@ app.post('/trunk/unlock', authenticateApiKey, async (req, res) => {
 });
 
 // POST /alert/lights
-app.post('/alert/lights', authenticateApiKey, async (req, res) => {
+app.post('/alert/lights', authenticateApiKey, checkEndpointEnabled('alert', 'lights'), requireConfirmation('alert_lights'), async (req, res) => {
     try {
         const { duration_seconds = 30 } = req.body;
         
@@ -259,7 +367,7 @@ app.post('/alert/lights', authenticateApiKey, async (req, res) => {
 });
 
 // POST /alert/horn
-app.post('/alert/horn', authenticateApiKey, async (req, res) => {
+app.post('/alert/horn', authenticateApiKey, checkEndpointEnabled('alert', 'horn'), requireConfirmation('alert_horn'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.alert({
@@ -281,7 +389,7 @@ app.post('/alert/horn', authenticateApiKey, async (req, res) => {
 });
 
 // POST /alert/both
-app.post('/alert/both', authenticateApiKey, async (req, res) => {
+app.post('/alert/both', authenticateApiKey, checkEndpointEnabled('alert', 'both'), requireConfirmation('alert_both'), async (req, res) => {
     try {
         const { duration_seconds = 30 } = req.body;
         
@@ -307,7 +415,7 @@ app.post('/alert/both', authenticateApiKey, async (req, res) => {
 });
 
 // POST /alert/cancel
-app.post('/alert/cancel', authenticateApiKey, async (req, res) => {
+app.post('/alert/cancel', authenticateApiKey, checkEndpointEnabled('alert', 'cancel'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.cancelAlert()
@@ -329,7 +437,7 @@ app.post('/alert/cancel', authenticateApiKey, async (req, res) => {
 // Vehicle Information Endpoints
 
 // GET /status
-app.get('/status', authenticateApiKey, async (req, res) => {
+app.get('/status', authenticateApiKey, checkEndpointEnabled('status', 'get'), async (req, res) => {
     try {
         const client = createOnStarClient();
         
@@ -383,7 +491,7 @@ app.get('/status', authenticateApiKey, async (req, res) => {
 });
 
 // GET /location
-app.get('/location', authenticateApiKey, async (req, res) => {
+app.get('/location', authenticateApiKey, checkEndpointEnabled('location', 'get'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.location()
@@ -411,7 +519,7 @@ app.get('/location', authenticateApiKey, async (req, res) => {
 });
 
 // GET /diagnostics
-app.get('/diagnostics', authenticateApiKey, async (req, res) => {
+app.get('/diagnostics', authenticateApiKey, checkEndpointEnabled('diagnostics', 'get'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.diagnostics()
@@ -436,7 +544,7 @@ app.get('/diagnostics', authenticateApiKey, async (req, res) => {
 // EV-Specific Endpoints
 
 // POST /charging/start
-app.post('/charging/start', authenticateApiKey, async (req, res) => {
+app.post('/charging/start', authenticateApiKey, checkEndpointEnabled('charging', 'start'), requireConfirmation('charging_start'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.chargeOverride({ mode: 'CHARGE_NOW' })
@@ -456,7 +564,7 @@ app.post('/charging/start', authenticateApiKey, async (req, res) => {
 });
 
 // POST /charging/stop
-app.post('/charging/stop', authenticateApiKey, async (req, res) => {
+app.post('/charging/stop', authenticateApiKey, checkEndpointEnabled('charging', 'stop'), requireConfirmation('charging_stop'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.chargeOverride({ mode: 'STOP_CHARGING' })
@@ -476,7 +584,7 @@ app.post('/charging/stop', authenticateApiKey, async (req, res) => {
 });
 
 // GET /charging/profile
-app.get('/charging/profile', authenticateApiKey, async (req, res) => {
+app.get('/charging/profile', authenticateApiKey, checkEndpointEnabled('charging', 'profile_get'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.getChargingProfile()
@@ -498,7 +606,7 @@ app.get('/charging/profile', authenticateApiKey, async (req, res) => {
 });
 
 // POST /charging/profile
-app.post('/charging/profile', authenticateApiKey, async (req, res) => {
+app.post('/charging/profile', authenticateApiKey, checkEndpointEnabled('charging', 'profile_set'), async (req, res) => {
     try {
         const { scheduled_start = '23:00', target_level = 90, rate_limit = 'normal' } = req.body;
         
@@ -528,7 +636,7 @@ app.post('/charging/profile', authenticateApiKey, async (req, res) => {
 // System Endpoints
 
 // GET /health
-app.get('/health', async (req, res) => {
+app.get('/health', checkEndpointEnabled('system', 'health'), async (req, res) => {
     try {
         const { success, result, error } = await executeOnStarCommand(
             (client) => client.getAccountVehicles()
@@ -560,7 +668,7 @@ app.get('/health', async (req, res) => {
 });
 
 // GET /capabilities
-app.get('/capabilities', authenticateApiKey, async (req, res) => {
+app.get('/capabilities', authenticateApiKey, checkEndpointEnabled('system', 'capabilities'), async (req, res) => {
     res.json(createResponse(true, 'Vehicle capabilities retrieved', {
         vehicle_info: {
             make: 'Chevrolet',
@@ -576,8 +684,34 @@ app.get('/capabilities', authenticateApiKey, async (req, res) => {
         limitations: {
             rate_limit_minutes: 30,
             hibernation_mode: '4-5 requests after engine off'
+        },
+        configuration: {
+            endpoints_enabled: config.api_endpoints,
+            security_settings: {
+                confirmation_required: config.security.require_confirmation,
+                rate_limiting: config.security.rate_limiting
+            },
+            config_file: 'config.json'
         }
     }));
+});
+
+// POST /config/reload
+app.post('/config/reload', authenticateApiKey, async (req, res) => {
+    try {
+        const configPath = path.join(__dirname, 'config.json');
+        const newConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        config = newConfig;
+        
+        console.log('Configuration reloaded successfully');
+        res.json(createResponse(true, 'Configuration reloaded successfully', {
+            timestamp: new Date().toISOString(),
+            config: config
+        }));
+    } catch (error) {
+        console.error('Failed to reload configuration:', error.message);
+        res.status(500).json(createResponse(false, `Failed to reload configuration: ${error.message}`));
+    }
 });
 
 // Helper function to parse diagnostics

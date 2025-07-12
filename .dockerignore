@@ -1,0 +1,80 @@
+# Git
+.git
+.gitignore
+
+# Node.js
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Test files
+test/
+mytests/
+*.test.js
+*.spec.js
+
+# Documentation
+*.md
+!README.md
+!RAILWAY_DEPLOYMENT.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Dependency directories
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Build outputs
+build/
+dist/
+
+# Temporary files
+tmp/
+temp/
+temp-browser-profile/
+
+# Old files
+.old/
+
+# Docker
+Dockerfile.node
+docker-compose*.yml
+
+# Tokens (will be created in container)
+tokens/
+gm_tokens.json
+microsoft_tokens.json 

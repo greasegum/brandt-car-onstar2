@@ -1,0 +1,72 @@
+{
+  "api_endpoints": {
+    "climate": {
+      "start": true,
+      "stop": true
+    },
+    "doors": {
+      "lock": true,
+      "unlock": true
+    },
+    "trunk": {
+      "lock": true,
+      "unlock": true
+    },
+    "alert": {
+      "lights": false,
+      "horn": false,
+      "both": false,
+      "cancel": true
+    },
+    "status": {
+      "get": true
+    },
+    "location": {
+      "get": true
+    },
+    "diagnostics": {
+      "get": true
+    },
+    "charging": {
+      "start": true,
+      "stop": true,
+      "profile_get": true,
+      "profile_set": true
+    },
+    "system": {
+      "health": true,
+      "capabilities": true
+    }
+  },
+  "security": {
+    "require_confirmation": {
+      "alert_lights": true,
+      "alert_horn": true,
+      "alert_both": true,
+      "climate_start": false,
+      "doors_unlock": false,
+      "trunk_unlock": false,
+      "charging_start": false,
+      "charging_stop": false
+    },
+    "rate_limiting": {
+      "alert_commands": {
+        "window_minutes": 60,
+        "max_requests": 3
+      },
+      "door_commands": {
+        "window_minutes": 15,
+        "max_requests": 10
+      }
+    }
+  },
+  "logging": {
+    "log_all_requests": true,
+    "log_disabled_attempts": true,
+    "log_file": "./logs/api_access.log"
+  },
+  "notifications": {
+    "disabled_endpoint_message": "This endpoint has been disabled for safety reasons. Check config.json to enable.",
+    "confirmation_required_message": "This action requires confirmation. Add 'confirm=true' to your request body."
+  }
+} 
