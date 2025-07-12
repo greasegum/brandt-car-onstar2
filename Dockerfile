@@ -30,6 +30,7 @@ COPY config_manager.js ./
 # Copy application code
 COPY server.js ./
 COPY onstar.js ./
+COPY database.js ./
 COPY deps/ ./deps/
 
 # Create necessary directories
