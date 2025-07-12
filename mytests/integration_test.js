@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const OnStar = require('../onstar.js');
+const OnStar = require('onstarjs2');
 
 console.log('🔍 OnStar Integration System Validation');
 console.log('=====================================\n');
@@ -42,13 +42,13 @@ async function runIntegrationTest() {
     try {
         console.log('1. CHECKING ENVIRONMENT SETUP\n');
         
-        // Check for .secrets file
-        if (!fs.existsSync('.secrets')) {
-            logTest('Environment Check', 'fail', '.secrets file not found');
-            console.log('\n❌ Critical: .secrets file is required. Please create it with your OnStar credentials.');
+        // Check for .env file
+        if (!fs.existsSync('.env')) {
+            logTest('Environment Check', 'fail', '.env file not found');
+            console.log('\n❌ Critical: .env file is required. Please create it with your OnStar credentials.');
             return;
         }
-        logTest('Environment Check', 'pass', '.secrets file exists');
+        logTest('Environment Check', 'pass', '.env file exists');
         
         // Check Node.js version
         const nodeVersion = process.version;
@@ -61,18 +61,25 @@ async function runIntegrationTest() {
         
         // Check for required dependencies
         const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-        const hasOnstarDep = packageJson.dependencies && packageJson.dependencies.onstarjs;
+        const hasOnstarDep = packageJson.dependencies && packageJson.dependencies.onstarjs2;
         if (hasOnstarDep) {
-            logTest('Dependencies', 'pass', 'OnStarJS dependency found');
+            logTest('Dependencies', 'pass', 'OnStarJS2 dependency found');
         } else {
-            logTest('Dependencies', 'warning', 'OnStarJS not found in package.json');
+            logTest('Dependencies', 'warning', 'OnStarJS2 not found in package.json');
         }
         
         console.log('\n2. VALIDATING AUTHENTICATION\n');
         
-        // Initialize OnStar
+        // Initialize OnStar with credentials from .env
         const onstar = OnStar.create({
-            debug: false,
+            username: process.env.ONSTAR_USERNAME,
+            password: process.env.ONSTAR_PASSWORD,
+            vin: process.env.ONSTAR_VIN,
+            onStarPin: process.env.ONSTAR_PIN,
+            onStarTOTP: process.env.ONSTAR_TOTP_SECRET,
+            deviceId: process.env.ONSTAR_DEVICEID,
+            tokenLocation: './',
+            checkRequestStatus: true,
             requestPollingTimeoutSeconds: 60,
             requestPollingIntervalSeconds: 3
         });
@@ -207,7 +214,7 @@ async function runIntegrationTest() {
         console.log('   Ready for production use with proper monitoring.');
     } else {
         console.log('\n🔧 Some tests failed. Please check the errors above and:');
-        console.log('   1. Verify your .secrets file configuration');
+        console.log('   1. Verify your .env file configuration');
         console.log('   2. Ensure OnStar account has "Third-Party Authenticator App" enabled');
         console.log('   3. Check for rate limiting (wait 30 minutes if needed)');
         console.log('   4. Review the troubleshooting guide in ONSTAR_INTEGRATION_GUIDE.md');

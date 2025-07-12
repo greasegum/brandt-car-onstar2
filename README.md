@@ -21,17 +21,67 @@ This fork is for me to experiment with the capabilities exposed in the original 
 <!-- ![node-red-contrib-onstar2-sample_s](https://user-images.githubusercontent.com/17056173/205470439-c27a5fc0-2ec3-4043-bef3-408042f78d29.png) -->
 ![Nodes_node-red-contrib-onstar2](https://github.com/BigThunderSR/node-red-contrib-onstar2/assets/17056173/dc0a0993-5e64-4445-b38e-f24a90c2256c)
 
-## Install
+## 🚀 New: REST API for Brandt AI Integration
+
+This project now includes a **REST API server** that exposes the OnStar functionality for integration with AI assistants like Brandt. The API provides the same vehicle control capabilities as the Node-RED nodes but through HTTP endpoints.
+
+### Quick Start - REST API
+
+1. **Set up environment variables:**
+```bash
+cp .env.example .env
+# Edit .env with your OnStar credentials
+```
+
+2. **Install dependencies:**
+```bash
+npm install
+```
+
+3. **Run the API server:**
+```bash
+# Development
+npm run dev
+
+# Production
+npm start
+
+# Or with Docker
+docker-compose -f docker-compose.node.yml up -d
+```
+
+4. **Test the API:**
+```bash
+curl -X GET "http://localhost:8080/health" \
+  -H "Authorization: Bearer brandt-car-boltaire-2025"
+```
+
+### Available REST Endpoints
+
+- `POST /climate/start` - Start climate preconditioning
+- `POST /climate/stop` - Stop climate preconditioning
+- `POST /doors/lock` - Lock vehicle doors
+- `POST /doors/unlock` - Unlock vehicle doors
+- `GET /status` - Get comprehensive vehicle status
+- `GET /location` - Get vehicle location
+- `GET /diagnostics` - Get detailed vehicle diagnostics
+- And many more...
+
+See the [API Documentation](#api-documentation) section below for complete details.
+
+---
+
+## 📦 Node-RED Installation
 
 ```sh
 npm install node-red-contrib-onstar2
 ```
 
-## Documentation
+## 📚 Documentation
 
 Each node is self-explanatory with hints provided wherever necessary as well as detailed information in the Help section of each node as necessary.
 
-## Running
+## 🏃‍♂️ Running
 
 Collect the following information:
 
@@ -39,7 +89,7 @@ Collect the following information:
 1. OnStar login: username, password, PIN, [TOTP Key (Please click link for instructions)](https://github.com/BigThunderSR/OnStarJS?tab=readme-ov-file#new-requirement-as-of-2024-11-19)
 1. Your car's VIN. Easily found in the monthly OnStar diagnostic emails.
 
-## Supported Features
+## ✅ Supported Features
 
 - Lock Doors
 - Unlock Doors
@@ -58,7 +108,90 @@ Collect the following information:
 - Get Diagnostic Information
 - Get Vehicle Capabilities
 
-## My other related projects
+## 📖 API Documentation
+
+### Authentication
+
+All REST API endpoints require API key authentication via Bearer token:
+
+```bash
+curl -X POST "http://localhost:8080/climate/start" \
+  -H "Authorization: Bearer brandt-car-boltaire-2025" \
+  -H "Content-Type: application/json" \
+  -d '{"duration_minutes": 10}'
+```
+
+### Response Format
+
+All endpoints return JSON responses in this format:
+
+```json
+{
+  "success": true,
+  "message": "Operation completed successfully",
+  "timestamp": "2025-01-10T10:30:00Z",
+  "data": {
+    // Endpoint-specific data
+  }
+}
+```
+
+### Example Usage
+
+#### Start Climate Control
+```bash
+curl -X POST "http://localhost:8080/climate/start" \
+  -H "Authorization: Bearer brandt-car-boltaire-2025" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "duration_minutes": 15,
+    "force": false
+  }'
+```
+
+#### Get Vehicle Status
+```bash
+curl -X GET "http://localhost:8080/status" \
+  -H "Authorization: Bearer brandt-car-boltaire-2025"
+```
+
+#### Lock Vehicle Doors
+```bash
+curl -X POST "http://localhost:8080/doors/lock" \
+  -H "Authorization: Bearer brandt-car-boltaire-2025"
+```
+
+### Rate Limits
+
+- OnStar enforces 30-minute intervals between command sequences
+- Vehicle may enter hibernation mode after 4-5 requests
+- Respect rate limits to avoid API blocks
+
+## 🔧 Development
+
+### Node-RED Development
+```bash
+npm test
+```
+
+### REST API Development
+```bash
+npm run dev
+```
+
+## 🐳 Docker Deployment
+
+### Node-RED Nodes
+```bash
+npm install node-red-contrib-onstar2
+```
+
+### REST API
+```bash
+docker-compose -f docker-compose.node.yml up -d
+```
+
+## 🔗 My other related projects
 
 - [https://github.com/BigThunderSR/onstar2mqtt](https://github.com/BigThunderSR/onstar2mqtt)
 

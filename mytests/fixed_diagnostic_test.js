@@ -6,7 +6,7 @@
  */
 
 const OnStar = require('onstarjs2');
-require('dotenv').config({ path: '.secrets' });
+require('dotenv').config();
 
 const config = {
     username: process.env.ONSTAR_USERNAME,
@@ -15,7 +15,7 @@ const config = {
     onStarPin: process.env.ONSTAR_PIN,
     onStarTOTP: process.env.ONSTAR_TOTP_SECRET,
     deviceId: process.env.ONSTAR_DEVICEID,
-    tokenLocation: './tokens/',
+    tokenLocation: './',
     checkRequestStatus: true,
     requestPollingTimeoutSeconds: 120,
     requestPollingIntervalSeconds: 10

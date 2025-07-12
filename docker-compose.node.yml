@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  brandt-car-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "8080:8080"
+    environment:
+      # OnStar Authentication
+      - ONSTAR_USERNAME=${ONSTAR_USERNAME}
+      - ONSTAR_PASSWORD=${ONSTAR_PASSWORD}
+      - ONSTAR_PIN=${ONSTAR_PIN}
+      - ONSTAR_VIN=${ONSTAR_VIN}
+      - ONSTAR_DEVICEID=${ONSTAR_DEVICEID}
+      - ONSTAR_TOTP_SECRET=${ONSTAR_TOTP_SECRET}
+      
+      # API Configuration
+      - API_KEY=${API_KEY:-brandt-car-boltaire-2025}
+      - ONSTAR_TOKEN_LOCATION=/app/tokens/
+      
+      # Performance Tuning
+      - ONSTAR_REFRESH=1800000
+      - ONSTAR_TIMEOUT=30000
+      - LOG_LEVEL=INFO
+      - CACHE_TTL=900
+    volumes:
+      - ./tokens:/app/tokens
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3 
