@@ -26,7 +26,6 @@ RUN npm ci --only=production
 # Copy configuration files
 COPY config.json ./
 COPY config_manager.js ./
-COPY config_examples.md ./
 
 # Copy application code
 COPY server.js ./
