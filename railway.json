@@ -8,5 +8,21 @@
     "numReplicas": 1,
     "sleepApplication": false,
     "restartPolicyType": "ON_FAILURE"
+  },
+  "environments": {
+    "production": {
+      "variables": {
+        "NODE_ENV": "production",
+        "PORT": "8080",
+        "DB_SSL": "true"
+      }
+    },
+    "development": {
+      "variables": {
+        "NODE_ENV": "development",
+        "PORT": "8080",
+        "DB_SSL": "false"
+      }
+    }
   }
 } 

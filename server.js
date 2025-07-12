@@ -15,6 +15,9 @@ require('dotenv').config();
 const OnStar = require('onstarjs2');
 const _ = require('lodash');
 
+// Import database module
+const db = require('./database');
+
 // Load configuration
 let config;
 try {
@@ -169,6 +172,69 @@ function logRequest(req, res, next) {
 
 // Apply request logging
 app.use(logRequest);
+
+// Database logging middleware
+app.use(async (req, res, next) => {
+    const startTime = Date.now();
+    const originalSend = res.send;
+    
+    // Override res.send to capture response
+    res.send = function(data) {
+        const executionTime = Date.now() - startTime;
+        
+        // Log the request/response
+        db.logApiRequest({
+            endpoint: req.path,
+            method: req.method,
+            userAgent: req.get('User-Agent'),
+            ipAddress: req.ip,
+            apiKey: req.headers.authorization ? req.headers.authorization.replace('Bearer ', '') : null,
+            requestBody: req.method === 'POST' || req.method === 'PUT' ? req.body : null,
+            responseStatus: res.statusCode,
+            responseBody: data,
+            executionTime,
+            success: res.statusCode < 400,
+            errorMessage: res.statusCode >= 400 ? data : null,
+            vehicleVin: process.env.ONSTAR_VIN,
+            commandType: getCommandType(req.path),
+            safetyLevel: getSafetyLevel(req.path),
+            requiresConfirmation: requiresConfirmation(req.path),
+            confirmationProvided: req.body && req.body.confirm === true,
+            environment: process.env.RAILWAY_ENVIRONMENT || 'development',
+            deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || 'local'
+        }).catch(err => {
+            console.error('Failed to log request:', err.message);
+        });
+        
+        originalSend.call(this, data);
+    };
+    
+    next();
+});
+
+// Helper function to determine command type
+function getCommandType(path) {
+    if (path.startsWith('/climate')) return 'climate_control';
+    if (path.startsWith('/doors')) return 'door_control';
+    if (path.startsWith('/trunk')) return 'trunk_control';
+    if (path.startsWith('/alert')) return 'alert';
+    if (path.startsWith('/charging')) return 'charging';
+    if (path.startsWith('/status') || path.startsWith('/location') || path.startsWith('/diagnostics')) return 'information';
+    if (path.startsWith('/health') || path.startsWith('/help') || path.startsWith('/contract')) return 'system';
+    return 'unknown';
+}
+
+// Helper function to determine safety level
+function getSafetyLevel(path) {
+    if (path.startsWith('/alert')) return 'high_risk';
+    if (path.includes('unlock') || path.startsWith('/charging')) return 'medium';
+    return 'safe';
+}
+
+// Helper function to check if confirmation is required
+function requiresConfirmation(path) {
+    return path.includes('unlock') || path.startsWith('/alert') || path.startsWith('/charging');
+}
 
 // Create OnStar client
 function createOnStarClient() {
@@ -696,6 +762,792 @@ app.get('/capabilities', authenticateApiKey, checkEndpointEnabled('system', 'cap
     }));
 });
 
+// GET /help - Dynamic help endpoint for bot integration
+app.get('/help', async (req, res) => {
+    const helpData = generateHelpData();
+    res.json(createResponse(true, 'Available commands and safety status', helpData));
+});
+
+// GET /contract - API contract document for bot integration
+app.get('/contract', async (req, res) => {
+    const contractData = generateApiContract();
+    res.json(createResponse(true, 'API contract for bot integration', contractData));
+});
+
+// Helper function to generate dynamic help data
+function generateHelpData() {
+    const commands = [];
+    
+    // Climate Control Commands
+    if (config.api_endpoints.climate.start) {
+        commands.push({
+            command: 'start_climate',
+            endpoint: 'POST /climate/start',
+            description: 'Start climate preconditioning (heating/cooling)',
+            parameters: {
+                duration_minutes: 'number (optional, default: 10)',
+                temperature: 'number (optional)'
+            },
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.climate_start || false,
+            example: 'Start climate for 15 minutes: POST /climate/start {"duration_minutes": 15}'
+        });
+    }
+    
+    if (config.api_endpoints.climate.stop) {
+        commands.push({
+            command: 'stop_climate',
+            endpoint: 'POST /climate/stop',
+            description: 'Stop climate preconditioning',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Stop climate: POST /climate/stop'
+        });
+    }
+    
+    // Door Control Commands
+    if (config.api_endpoints.doors.lock) {
+        commands.push({
+            command: 'lock_doors',
+            endpoint: 'POST /doors/lock',
+            description: 'Lock all vehicle doors',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Lock doors: POST /doors/lock'
+        });
+    }
+    
+    if (config.api_endpoints.doors.unlock) {
+        commands.push({
+            command: 'unlock_doors',
+            endpoint: 'POST /doors/unlock',
+            description: 'Unlock all vehicle doors',
+            parameters: {
+                confirm: 'boolean (required if confirmation enabled)'
+            },
+            safety_level: 'medium',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.doors_unlock || false,
+            example: 'Unlock doors: POST /doors/unlock {"confirm": true}'
+        });
+    } else {
+        commands.push({
+            command: 'unlock_doors',
+            endpoint: 'POST /doors/unlock',
+            description: 'Unlock all vehicle doors',
+            parameters: {},
+            safety_level: 'medium',
+            enabled: false,
+            disabled_reason: 'Disabled for security - can be enabled in config.json',
+            example: 'Currently disabled'
+        });
+    }
+    
+    // Trunk Control Commands
+    if (config.api_endpoints.trunk.lock) {
+        commands.push({
+            command: 'lock_trunk',
+            endpoint: 'POST /trunk/lock',
+            description: 'Lock vehicle trunk',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Lock trunk: POST /trunk/lock'
+        });
+    }
+    
+    if (config.api_endpoints.trunk.unlock) {
+        commands.push({
+            command: 'unlock_trunk',
+            endpoint: 'POST /trunk/unlock',
+            description: 'Unlock vehicle trunk',
+            parameters: {
+                confirm: 'boolean (required if confirmation enabled)'
+            },
+            safety_level: 'medium',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.trunk_unlock || false,
+            example: 'Unlock trunk: POST /trunk/unlock {"confirm": true}'
+        });
+    } else {
+        commands.push({
+            command: 'unlock_trunk',
+            endpoint: 'POST /trunk/unlock',
+            description: 'Unlock vehicle trunk',
+            parameters: {},
+            safety_level: 'medium',
+            enabled: false,
+            disabled_reason: 'Disabled for security - can be enabled in config.json',
+            example: 'Currently disabled'
+        });
+    }
+    
+    // Alert Commands (potentially dangerous)
+    if (config.api_endpoints.alert.lights) {
+        commands.push({
+            command: 'flash_lights',
+            endpoint: 'POST /alert/lights',
+            description: 'Flash vehicle lights (WARNING: May trigger car alarm)',
+            parameters: {
+                duration_seconds: 'number (optional, default: 30)',
+                confirm: 'boolean (required if confirmation enabled)'
+            },
+            safety_level: 'high_risk',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.alert_lights || false,
+            warning: 'This may trigger the car alarm and disturb neighbors',
+            example: 'Flash lights: POST /alert/lights {"duration_seconds": 10, "confirm": true}'
+        });
+    } else {
+        commands.push({
+            command: 'flash_lights',
+            endpoint: 'POST /alert/lights',
+            description: 'Flash vehicle lights',
+            parameters: {},
+            safety_level: 'high_risk',
+            enabled: false,
+            disabled_reason: 'Disabled for safety - triggers car alarm',
+            warning: 'This command is disabled by default because it triggers the car alarm',
+            example: 'Currently disabled for safety'
+        });
+    }
+    
+    if (config.api_endpoints.alert.horn) {
+        commands.push({
+            command: 'honk_horn',
+            endpoint: 'POST /alert/horn',
+            description: 'Activate vehicle horn (WARNING: Loud noise)',
+            parameters: {
+                confirm: 'boolean (required if confirmation enabled)'
+            },
+            safety_level: 'high_risk',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.alert_horn || false,
+            warning: 'This will make a loud noise and may disturb neighbors',
+            example: 'Honk horn: POST /alert/horn {"confirm": true}'
+        });
+    } else {
+        commands.push({
+            command: 'honk_horn',
+            endpoint: 'POST /alert/horn',
+            description: 'Activate vehicle horn',
+            parameters: {},
+            safety_level: 'high_risk',
+            enabled: false,
+            disabled_reason: 'Disabled for safety - loud noise disturbance',
+            warning: 'This command is disabled by default to prevent noise disturbance',
+            example: 'Currently disabled for safety'
+        });
+    }
+    
+    if (config.api_endpoints.alert.both) {
+        commands.push({
+            command: 'alert_both',
+            endpoint: 'POST /alert/both',
+            description: 'Activate both lights and horn (WARNING: Very disruptive)',
+            parameters: {
+                duration_seconds: 'number (optional, default: 30)',
+                confirm: 'boolean (required if confirmation enabled)'
+            },
+            safety_level: 'high_risk',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.alert_both || false,
+            warning: 'This will trigger car alarm AND make loud noise',
+            example: 'Alert both: POST /alert/both {"duration_seconds": 10, "confirm": true}'
+        });
+    } else {
+        commands.push({
+            command: 'alert_both',
+            endpoint: 'POST /alert/both',
+            description: 'Activate both lights and horn',
+            parameters: {},
+            safety_level: 'high_risk',
+            enabled: false,
+            disabled_reason: 'Disabled for safety - very disruptive',
+            warning: 'This command is disabled by default due to extreme disruption',
+            example: 'Currently disabled for safety'
+        });
+    }
+    
+    if (config.api_endpoints.alert.cancel) {
+        commands.push({
+            command: 'cancel_alert',
+            endpoint: 'POST /alert/cancel',
+            description: 'Cancel any active alerts (lights/horn)',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Cancel alerts: POST /alert/cancel'
+        });
+    }
+    
+    // Charging Commands
+    if (config.api_endpoints.charging.start) {
+        commands.push({
+            command: 'start_charging',
+            endpoint: 'POST /charging/start',
+            description: 'Start vehicle charging immediately',
+            parameters: {
+                confirm: 'boolean (required if confirmation enabled)'
+            },
+            safety_level: 'medium',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.charging_start || false,
+            example: 'Start charging: POST /charging/start {"confirm": true}'
+        });
+    } else {
+        commands.push({
+            command: 'start_charging',
+            endpoint: 'POST /charging/start',
+            description: 'Start vehicle charging immediately',
+            parameters: {},
+            safety_level: 'medium',
+            enabled: false,
+            disabled_reason: 'Disabled - may affect planned charging schedule',
+            example: 'Currently disabled'
+        });
+    }
+    
+    if (config.api_endpoints.charging.stop) {
+        commands.push({
+            command: 'stop_charging',
+            endpoint: 'POST /charging/stop',
+            description: 'Stop vehicle charging',
+            parameters: {
+                confirm: 'boolean (required if confirmation enabled)'
+            },
+            safety_level: 'medium',
+            enabled: true,
+            requires_confirmation: config.security.require_confirmation.charging_stop || false,
+            example: 'Stop charging: POST /charging/stop {"confirm": true}'
+        });
+    } else {
+        commands.push({
+            command: 'stop_charging',
+            endpoint: 'POST /charging/stop',
+            description: 'Stop vehicle charging',
+            parameters: {},
+            safety_level: 'medium',
+            enabled: false,
+            disabled_reason: 'Disabled - may interrupt important charging',
+            example: 'Currently disabled'
+        });
+    }
+    
+    // Information Commands (always safe)
+    if (config.api_endpoints.status.get) {
+        commands.push({
+            command: 'get_status',
+            endpoint: 'GET /status',
+            description: 'Get complete vehicle status (battery, location, diagnostics)',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Get status: GET /status'
+        });
+    }
+    
+    if (config.api_endpoints.location.get) {
+        commands.push({
+            command: 'get_location',
+            endpoint: 'GET /location',
+            description: 'Get current vehicle location',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Get location: GET /location'
+        });
+    }
+    
+    if (config.api_endpoints.diagnostics.get) {
+        commands.push({
+            command: 'get_diagnostics',
+            endpoint: 'GET /diagnostics',
+            description: 'Get vehicle diagnostic information',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Get diagnostics: GET /diagnostics'
+        });
+    }
+    
+    if (config.api_endpoints.charging.profile_get) {
+        commands.push({
+            command: 'get_charging_profile',
+            endpoint: 'GET /charging/profile',
+            description: 'Get current charging profile/schedule',
+            parameters: {},
+            safety_level: 'safe',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Get charging profile: GET /charging/profile'
+        });
+    }
+    
+    if (config.api_endpoints.charging.profile_set) {
+        commands.push({
+            command: 'set_charging_profile',
+            endpoint: 'POST /charging/profile',
+            description: 'Set charging profile/schedule',
+            parameters: {
+                scheduled_start: 'string (optional, default: "23:00")',
+                target_level: 'number (optional, default: 90)',
+                rate_limit: 'string (optional, default: "normal")'
+            },
+            safety_level: 'medium',
+            enabled: true,
+            requires_confirmation: false,
+            example: 'Set profile: POST /charging/profile {"scheduled_start": "22:00", "target_level": 80}'
+        });
+    }
+    
+    // System Commands
+    commands.push({
+        command: 'health_check',
+        endpoint: 'GET /health',
+        description: 'Check API and OnStar connection health',
+        parameters: {},
+        safety_level: 'safe',
+        enabled: true,
+        requires_confirmation: false,
+        example: 'Health check: GET /health'
+    });
+    
+    // Count commands by safety level
+    const safetyStats = {
+        safe: commands.filter(cmd => cmd.safety_level === 'safe').length,
+        medium: commands.filter(cmd => cmd.safety_level === 'medium').length,
+        high_risk: commands.filter(cmd => cmd.safety_level === 'high_risk').length,
+        enabled: commands.filter(cmd => cmd.enabled).length,
+        disabled: commands.filter(cmd => !cmd.enabled).length,
+        require_confirmation: commands.filter(cmd => cmd.requires_confirmation).length
+    };
+    
+    return {
+        vehicle_info: {
+            make: 'Chevrolet',
+            model: 'Bolt EV',
+            year: 2020,
+            vin: process.env.ONSTAR_VIN
+        },
+        api_info: {
+            base_url: process.env.API_BASE_URL || 'http://localhost:8080',
+            authentication: 'Bearer token required in Authorization header',
+            api_key: 'Set API_KEY environment variable (default: brandt-car-boltaire-2025)'
+        },
+        environment_status: checkEnvironmentStatus(),
+        safety_summary: {
+            total_commands: commands.length,
+            enabled_commands: safetyStats.enabled,
+            disabled_commands: safetyStats.disabled,
+            safe_commands: safetyStats.safe,
+            medium_risk_commands: safetyStats.medium,
+            high_risk_commands: safetyStats.high_risk,
+            confirmation_required: safetyStats.require_confirmation,
+            alert_endpoints_status: config.api_endpoints.alert.lights ? 'ENABLED (CAUTION)' : 'DISABLED (SAFE)'
+        },
+        commands: commands,
+        safety_notes: [
+            'Commands marked as "high_risk" are disabled by default for safety',
+            'Alert commands (lights/horn) may trigger car alarm and disturb neighbors',
+            'Commands requiring confirmation need "confirm": true in request body',
+            'All commands require valid API key in Authorization header',
+            'Vehicle must be awake for commands to work (may take 30+ seconds if sleeping)'
+        ],
+        bot_integration_tips: [
+            'Check "enabled" field before attempting to use a command',
+            'Respect "requires_confirmation" field and prompt user if needed',
+            'Use "safety_level" to determine if user confirmation is appropriate',
+            'Monitor "disabled_reason" to explain why commands are unavailable',
+            'Always check the "warning" field for high-risk commands'
+        ]
+    };
+}
+
+// Helper function to check environment status (Railway variables)
+function checkEnvironmentStatus() {
+    const requiredVars = [
+        'ONSTAR_USERNAME',
+        'ONSTAR_PASSWORD', 
+        'ONSTAR_PIN',
+        'ONSTAR_VIN',
+        'ONSTAR_DEVICEID',
+        'ONSTAR_TOTP_SECRET'
+    ];
+    
+    const optionalVars = [
+        'API_KEY',
+        'ONSTAR_TOKEN_LOCATION',
+        'ONSTAR_REFRESH',
+        'ONSTAR_TIMEOUT',
+        'LOG_LEVEL',
+        'CACHE_TTL'
+    ];
+    
+    const railwayVars = [
+        'RAILWAY_ENVIRONMENT',
+        'RAILWAY_PROJECT_ID',
+        'RAILWAY_SERVICE_ID',
+        'RAILWAY_DEPLOYMENT_ID',
+        'RAILWAY_REPLICA_ID',
+        'RAILWAY_GIT_COMMIT_SHA',
+        'RAILWAY_GIT_BRANCH',
+        'RAILWAY_GIT_REPO_NAME',
+        'RAILWAY_GIT_REPO_OWNER'
+    ];
+    
+    const envStatus = {
+        deployment_info: {
+            platform: process.env.RAILWAY_ENVIRONMENT ? 'Railway' : 'Local',
+            environment: process.env.RAILWAY_ENVIRONMENT || 'development',
+            project_id: process.env.RAILWAY_PROJECT_ID || 'local',
+            service_id: process.env.RAILWAY_SERVICE_ID || 'local',
+            deployment_id: process.env.RAILWAY_DEPLOYMENT_ID || 'local',
+            replica_id: process.env.RAILWAY_REPLICA_ID || 'local',
+            git_info: {
+                commit: process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown',
+                branch: process.env.RAILWAY_GIT_BRANCH || 'unknown',
+                repo: process.env.RAILWAY_GIT_REPO_NAME || 'unknown',
+                owner: process.env.RAILWAY_GIT_REPO_OWNER || 'unknown'
+            }
+        },
+        required_variables: {},
+        optional_variables: {},
+        railway_variables: {},
+        overall_status: 'healthy'
+    };
+    
+    let missingRequired = 0;
+    
+    // Check required variables
+    requiredVars.forEach(varName => {
+        const exists = !!process.env[varName];
+        envStatus.required_variables[varName] = {
+            configured: exists,
+            masked_value: exists ? `${process.env[varName].substring(0, 4)}...` : null
+        };
+        if (!exists) missingRequired++;
+    });
+    
+    // Check optional variables
+    optionalVars.forEach(varName => {
+        const exists = !!process.env[varName];
+        envStatus.optional_variables[varName] = {
+            configured: exists,
+            masked_value: exists ? `${process.env[varName].substring(0, 4)}...` : null,
+            default_used: !exists
+        };
+    });
+    
+    // Check Railway-specific variables
+    railwayVars.forEach(varName => {
+        const exists = !!process.env[varName];
+        envStatus.railway_variables[varName] = {
+            configured: exists,
+            value: exists ? process.env[varName] : null
+        };
+    });
+    
+    // Determine overall status
+    if (missingRequired > 0) {
+        envStatus.overall_status = 'error';
+        envStatus.status_message = `Missing ${missingRequired} required environment variables`;
+    } else if (missingRequired === 0) {
+        envStatus.overall_status = 'healthy';
+        envStatus.status_message = 'All required environment variables configured';
+    }
+    
+    // Add configuration override status
+    envStatus.configuration_overrides = checkConfigurationOverrides();
+    
+    return envStatus;
+}
+
+// Helper function to check configuration overrides via environment variables
+function checkConfigurationOverrides() {
+    const overrides = {};
+    const configEnvVars = [
+        'CONFIG_ALERT_LIGHTS',
+        'CONFIG_ALERT_HORN', 
+        'CONFIG_ALERT_BOTH',
+        'CONFIG_DOORS_UNLOCK',
+        'CONFIG_TRUNK_UNLOCK',
+        'CONFIG_CHARGING_START',
+        'CONFIG_CHARGING_STOP',
+        'CONFIG_REQUIRE_CONFIRM_UNLOCK',
+        'CONFIG_REQUIRE_CONFIRM_CHARGING',
+        'CONFIG_REQUIRE_CONFIRM_ALERTS'
+    ];
+    
+    configEnvVars.forEach(varName => {
+        if (process.env[varName] !== undefined) {
+            overrides[varName] = {
+                value: process.env[varName],
+                parsed: process.env[varName].toLowerCase() === 'true'
+            };
+        }
+    });
+    
+    return {
+        active_overrides: Object.keys(overrides).length,
+        overrides: overrides,
+        note: 'Environment variables can override config.json settings'
+    };
+}
+
+// Helper function to generate API contract
+function generateApiContract() {
+    const envStatus = checkEnvironmentStatus();
+    
+    return {
+        contract_version: '1.0.0',
+        api_version: '2.0.0',
+        generated_at: new Date().toISOString(),
+        
+        // Environment and deployment info
+        deployment: {
+            platform: envStatus.deployment_info.platform,
+            environment: envStatus.deployment_info.environment,
+            status: envStatus.overall_status,
+            configuration_source: envStatus.configuration_overrides.active_overrides > 0 ? 'environment_variables' : 'config_file'
+        },
+        
+        // Authentication contract
+        authentication: {
+            type: 'bearer_token',
+            header: 'Authorization',
+            format: 'Bearer {api_key}',
+            api_key_source: 'API_KEY environment variable',
+            default_key: 'brandt-car-boltaire-2025',
+            note: 'Change default API key in production'
+        },
+        
+        // Base URL contract
+        base_url: {
+            url: process.env.API_BASE_URL || 'http://localhost:8080',
+            environment_variable: 'API_BASE_URL',
+            note: 'Railway automatically sets this for deployed instances'
+        },
+        
+        // Rate limiting contract
+        rate_limits: {
+            global: {
+                window_minutes: 15,
+                max_requests: 100,
+                note: 'Applied to all endpoints'
+            },
+            alert_commands: config.security?.rate_limiting?.alert_commands || {
+                window_minutes: 60,
+                max_requests: 3,
+                note: 'Stricter limits for disruptive commands'
+            },
+            door_commands: config.security?.rate_limiting?.door_commands || {
+                window_minutes: 15,
+                max_requests: 10,
+                note: 'Moderate limits for security-related commands'
+            }
+        },
+        
+        // Response format contract
+        response_format: {
+            success_response: {
+                success: true,
+                message: 'string',
+                timestamp: 'ISO 8601 datetime',
+                data: 'object (optional)'
+            },
+            error_response: {
+                success: false,
+                message: 'string',
+                timestamp: 'ISO 8601 datetime',
+                data: 'object (optional, contains error details)'
+            },
+            status_codes: {
+                200: 'Success',
+                400: 'Bad Request (missing confirmation, invalid parameters)',
+                401: 'Unauthorized (missing or invalid API key)',
+                403: 'Forbidden (endpoint disabled)',
+                429: 'Rate Limited',
+                500: 'Internal Server Error (OnStar connection issues)'
+            }
+        },
+        
+        // Command categories contract
+        command_categories: {
+            information: {
+                description: 'Read-only commands that retrieve vehicle data',
+                safety_level: 'safe',
+                authentication_required: true,
+                confirmation_required: false,
+                commands: ['get_status', 'get_location', 'get_diagnostics', 'get_charging_profile']
+            },
+            vehicle_control: {
+                description: 'Commands that control vehicle functions',
+                safety_level: 'safe_to_medium',
+                authentication_required: true,
+                confirmation_required: 'varies',
+                commands: ['start_climate', 'stop_climate', 'lock_doors', 'unlock_doors', 'lock_trunk', 'unlock_trunk']
+            },
+            charging: {
+                description: 'Commands that control vehicle charging',
+                safety_level: 'medium',
+                authentication_required: true,
+                confirmation_required: 'configurable',
+                commands: ['start_charging', 'stop_charging', 'set_charging_profile']
+            },
+            alerts: {
+                description: 'Commands that trigger vehicle alerts (POTENTIALLY DISRUPTIVE)',
+                safety_level: 'high_risk',
+                authentication_required: true,
+                confirmation_required: true,
+                default_status: 'disabled',
+                commands: ['flash_lights', 'honk_horn', 'alert_both', 'cancel_alert']
+            },
+            system: {
+                description: 'System and configuration commands',
+                safety_level: 'safe',
+                authentication_required: 'varies',
+                confirmation_required: false,
+                commands: ['health_check', 'get_help', 'get_contract', 'reload_config']
+            }
+        },
+        
+        // Safety contract
+        safety_contract: {
+            safety_levels: {
+                safe: {
+                    description: 'No risk of disturbance or security issues',
+                    auto_execute: true,
+                    user_confirmation: false,
+                    examples: ['get_status', 'lock_doors']
+                },
+                medium: {
+                    description: 'May affect vehicle security or charging',
+                    auto_execute: 'configurable',
+                    user_confirmation: 'configurable',
+                    examples: ['unlock_doors', 'start_charging']
+                },
+                high_risk: {
+                    description: 'May cause disturbance or trigger alarms',
+                    auto_execute: false,
+                    user_confirmation: true,
+                    default_status: 'disabled',
+                    examples: ['flash_lights', 'honk_horn']
+                }
+            },
+            confirmation_mechanism: {
+                parameter: 'confirm',
+                type: 'boolean',
+                value: true,
+                location: 'request_body',
+                example: '{"confirm": true}'
+            },
+            disabled_commands: {
+                check_method: 'GET /help',
+                response_field: 'data.commands[].enabled',
+                reason_field: 'data.commands[].disabled_reason'
+            }
+        },
+        
+        // Error handling contract
+        error_handling: {
+            disabled_endpoint: {
+                status_code: 403,
+                response: {
+                    success: false,
+                    message: 'This endpoint has been disabled for safety reasons. Check config.json to enable.',
+                    data: {
+                        endpoint: 'category.action',
+                        enabled: false,
+                        config_file: 'config.json'
+                    }
+                }
+            },
+            confirmation_required: {
+                status_code: 400,
+                response: {
+                    success: false,
+                    message: 'This action requires confirmation. Add \'confirm=true\' to your request body.',
+                    data: {
+                        action: 'action_name',
+                        requires_confirmation: true,
+                        hint: 'Add \'confirm: true\' to your request body to proceed'
+                    }
+                }
+            },
+            onstar_error: {
+                status_code: 500,
+                response: {
+                    success: false,
+                    message: 'OnStar service error: {error_details}',
+                    data: {
+                        error_type: 'onstar_connection',
+                        retry_suggested: true
+                    }
+                }
+            }
+        },
+        
+        // Bot integration contract
+        bot_integration: {
+            recommended_flow: [
+                '1. Call GET /help to understand available commands',
+                '2. Check command.enabled before attempting execution',
+                '3. Respect command.safety_level for user confirmation',
+                '4. Add confirm: true for commands requiring confirmation',
+                '5. Handle 403/400 errors gracefully with user feedback',
+                '6. Implement retry logic for 500 errors'
+            ],
+            safety_recommendations: [
+                'Never auto-execute high_risk commands',
+                'Always prompt user for confirmation on medium risk commands',
+                'Implement command whitelisting for autonomous operation',
+                'Monitor rate limits to avoid service disruption',
+                'Cache /help response but refresh periodically'
+            ],
+            example_implementations: {
+                command_check: 'if (!command.enabled) return "Command disabled: " + command.disabled_reason',
+                safety_check: 'if (command.safety_level === "high_risk") return "User confirmation required"',
+                confirmation_add: 'if (command.requires_confirmation) params.confirm = true',
+                error_handling: 'if (response.status === 403) return "Command not available: " + response.data.message'
+            }
+        },
+        
+        // Configuration contract
+        configuration: {
+            config_file: 'config.json',
+            environment_overrides: envStatus.configuration_overrides.active_overrides > 0,
+            reload_endpoint: 'POST /config/reload',
+            real_time_updates: true,
+            override_variables: [
+                'CONFIG_ALERT_LIGHTS=true/false',
+                'CONFIG_ALERT_HORN=true/false',
+                'CONFIG_DOORS_UNLOCK=true/false',
+                'CONFIG_REQUIRE_CONFIRM_UNLOCK=true/false'
+            ]
+        },
+        
+        // Service level agreement
+        sla: {
+            availability: '99.9% (subject to OnStar service availability)',
+            response_time: 'Typically 1-30 seconds (depends on vehicle wake state)',
+            vehicle_wake_time: 'Up to 60 seconds for sleeping vehicles',
+            rate_limits: 'See rate_limits section',
+            support: 'Check /health endpoint for service status'
+        }
+    };
+}
+
 // POST /config/reload
 app.post('/config/reload', authenticateApiKey, async (req, res) => {
     try {
@@ -711,6 +1563,111 @@ app.post('/config/reload', authenticateApiKey, async (req, res) => {
     } catch (error) {
         console.error('Failed to reload configuration:', error.message);
         res.status(500).json(createResponse(false, `Failed to reload configuration: ${error.message}`));
+    }
+});
+
+// Database Analytics Endpoints
+
+// GET /analytics/stats
+app.get('/analytics/stats', authenticateApiKey, async (req, res) => {
+    try {
+        const { days = 7, endpoint, success, vehicle_vin } = req.query;
+        
+        const stats = await db.getCommandStats({
+            days: parseInt(days),
+            endpoint: endpoint || null,
+            success: success === 'true' ? true : success === 'false' ? false : null,
+            vehicleVin: vehicle_vin || null
+        });
+        
+        res.json(createResponse(true, 'Analytics statistics retrieved', {
+            period_days: parseInt(days),
+            filters: { endpoint, success, vehicle_vin },
+            statistics: stats
+        }));
+    } catch (error) {
+        console.error('Failed to get analytics stats:', error.message);
+        res.status(500).json(createResponse(false, `Failed to get analytics: ${error.message}`));
+    }
+});
+
+// GET /analytics/recent
+app.get('/analytics/recent', authenticateApiKey, async (req, res) => {
+    try {
+        const { limit = 50, offset = 0 } = req.query;
+        
+        const commands = await db.getRecentCommands(parseInt(limit), parseInt(offset));
+        
+        res.json(createResponse(true, 'Recent commands retrieved', {
+            commands: commands,
+            pagination: {
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                total: commands.length
+            }
+        }));
+    } catch (error) {
+        console.error('Failed to get recent commands:', error.message);
+        res.status(500).json(createResponse(false, `Failed to get recent commands: ${error.message}`));
+    }
+});
+
+// GET /analytics/errors
+app.get('/analytics/errors', authenticateApiKey, async (req, res) => {
+    try {
+        const { days = 7, limit = 100 } = req.query;
+        
+        const errors = await db.getErrorLogs(parseInt(days), parseInt(limit));
+        
+        res.json(createResponse(true, 'Error logs retrieved', {
+            errors: errors,
+            period_days: parseInt(days),
+            total_errors: errors.length
+        }));
+    } catch (error) {
+        console.error('Failed to get error logs:', error.message);
+        res.status(500).json(createResponse(false, `Failed to get error logs: ${error.message}`));
+    }
+});
+
+// GET /analytics/safety
+app.get('/analytics/safety', authenticateApiKey, async (req, res) => {
+    try {
+        const { days = 30 } = req.query;
+        
+        const violations = await db.getSafetyViolations(parseInt(days));
+        
+        res.json(createResponse(true, 'Safety violations retrieved', {
+            violations: violations,
+            period_days: parseInt(days),
+            total_violations: violations.length,
+            risk_breakdown: {
+                high_risk_attempts: violations.filter(v => v.safety_level === 'high_risk').length,
+                missing_confirmations: violations.filter(v => v.requires_confirmation && !v.confirmation_provided).length,
+                disabled_endpoint_attempts: violations.filter(v => v.response_status === 403).length
+            }
+        }));
+    } catch (error) {
+        console.error('Failed to get safety violations:', error.message);
+        res.status(500).json(createResponse(false, `Failed to get safety violations: ${error.message}`));
+    }
+});
+
+// POST /analytics/cleanup
+app.post('/analytics/cleanup', authenticateApiKey, async (req, res) => {
+    try {
+        const { days_to_keep = 90 } = req.body;
+        
+        const deletedCount = await db.cleanupOldLogs(parseInt(days_to_keep));
+        
+        res.json(createResponse(true, 'Database cleanup completed', {
+            deleted_records: deletedCount,
+            days_kept: parseInt(days_to_keep),
+            timestamp: new Date().toISOString()
+        }));
+    } catch (error) {
+        console.error('Failed to cleanup database:', error.message);
+        res.status(500).json(createResponse(false, `Failed to cleanup database: ${error.message}`));
     }
 });
 
@@ -742,10 +1699,18 @@ app.use((req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`🚗 Brandt Car API server running on port ${PORT}`);
     console.log(`📡 API Documentation: http://localhost:${PORT}/capabilities`);
     console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
+    
+    // Initialize database
+    try {
+        await db.initializeTables();
+        console.log(`📊 Database logging enabled`);
+    } catch (error) {
+        console.log(`⚠️  Database logging disabled: ${error.message}`);
+    }
 });
 
 module.exports = app; 

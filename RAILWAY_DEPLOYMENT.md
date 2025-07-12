@@ -14,7 +14,7 @@ This guide will help you deploy the Brandt Car API with configuration system to 
 
 You'll need to set these environment variables in Railway:
 
-#### Required OnStar Credentials
+#### Required OnStar Credentials (not real)
 ```
 ONSTAR_USERNAME=your.email@example.com
 ONSTAR_PASSWORD=YourPassword123
@@ -28,6 +28,16 @@ ONSTAR_TOTP_SECRET=ABCDEFGHIJKLMNOP
 ```
 API_KEY=brandt-car-boltaire-2025
 ONSTAR_TOKEN_LOCATION=/app/tokens/
+```
+
+#### Database Configuration (PostgreSQL)
+```
+DB_HOST=your-postgres-service.railway.internal
+DB_PORT=5432
+DB_NAME=railway
+DB_USER=postgres
+DB_PASSWORD=your_railway_password
+DB_SSL=true
 ```
 
 #### Optional Performance Settings
@@ -81,6 +91,9 @@ CACHE_TTL=900
    railway variables set ONSTAR_DEVICEID=a88b5cb1-c918-41a8-8d61-3e2c9f9d4a16
    railway variables set ONSTAR_TOTP_SECRET=ABCDEFGHIJKLMNOP
    railway variables set API_KEY=brandt-car-boltaire-2025
+   
+   # Database variables (Railway will provide these for PostgreSQL service)
+   railway variables set DB_SSL=true
    ```
 
 ### Step 3: Verify Deployment
@@ -123,6 +136,25 @@ node config_manager.js enable doors unlock
 node config_manager.js confirm doors_unlock yes
 ```
 
+### Step 5: Set Up PostgreSQL Database
+
+1. **Add PostgreSQL Service**:
+   - In Railway dashboard, click "New Service"
+   - Select "Database" → "PostgreSQL"
+   - Railway will automatically provide connection details
+
+2. **Link Database to API**:
+   - Railway will automatically inject database environment variables
+   - The API will automatically initialize the database tables
+   - Check logs for "Database logging enabled" message
+
+3. **Verify Database Connection**:
+   ```bash
+   # Test analytics endpoints
+   curl -X GET https://your-app.railway.app/analytics/stats \
+     -H "Authorization: Bearer your-api-key"
+   ```
+
 #### Option 2: Environment-based Configuration
 Add these Railway variables to override defaults:
 ```
@@ -132,7 +164,7 @@ CONFIG_DOORS_UNLOCK=true
 CONFIG_REQUIRE_CONFIRM_UNLOCK=true
 ```
 
-### Step 5: Monitor and Maintain
+### Step 6: Monitor and Maintain
 
 #### Check Logs
 ```bash
@@ -141,6 +173,21 @@ railway logs
 
 #### Monitor Health
 Railway provides automatic health checks via the `/health` endpoint.
+
+#### Monitor Analytics
+```bash
+# Get API usage statistics
+curl -X GET https://your-app.railway.app/analytics/stats \
+  -H "Authorization: Bearer your-api-key"
+
+# Check recent commands
+curl -X GET https://your-app.railway.app/analytics/recent \
+  -H "Authorization: Bearer your-api-key"
+
+# Monitor safety violations
+curl -X GET https://your-app.railway.app/analytics/safety \
+  -H "Authorization: Bearer your-api-key"
+```
 
 #### Update Configuration
 ```bash
