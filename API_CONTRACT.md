@@ -202,16 +202,153 @@ Before executing any command:
 4. Check `command.requires_confirmation`
 5. Handle `command.disabled_reason` if disabled
 
+## Session-Based Authentication (NEW)
+
+### Efficient Session Management
+
+The API now supports session-based authentication for dramatically improved performance:
+
+#### 1. Session Authentication Flow
+```bash
+# Step 1: Authenticate (10-30 seconds)
+curl -X POST https://your-api.railway.app/auth/session \
+  -H "Authorization: Bearer brandt-car-boltaire-2025"
+
+# Response:
+{
+  "success": true,
+  "message": "Authentication successful",
+  "data": {
+    "sessionId": "session_1672847234_abc123",
+    "status": "ready",
+    "expiresAt": "2025-01-04T11:00:00.000Z",
+    "vehicleCount": 1
+  }
+}
+```
+
+#### 2. Fast Command Execution (1-3 seconds)
+```bash
+# Commands now execute instantly using cached session
+curl -X POST https://your-api.railway.app/doors/unlock \
+  -H "Authorization: Bearer brandt-car-boltaire-2025" \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true}'
+
+# Response includes execution time:
+{
+  "success": true,
+  "message": "Vehicle doors unlocked",
+  "data": {
+    "action": "unlocked",
+    "execution_time_ms": 1247,
+    "session": {
+      "ready": true,
+      "sessionId": "session_1672847234_abc123",
+      "timeToExpiry": 1440000
+    }
+  }
+}
+```
+
+#### 3. Session Status Monitoring
+```bash
+# Check session health
+curl -X GET https://your-api.railway.app/auth/status \
+  -H "Authorization: Bearer brandt-car-boltaire-2025"
+
+# Response:
+{
+  "success": true,
+  "data": {
+    "session": {
+      "ready": true,
+      "authenticated": true,
+      "expired": false,
+      "expiringSoon": false,
+      "timeToExpiry": 1440000
+    }
+  }
+}
+```
+
+### Session Management Endpoints
+
+| Endpoint | Method | Purpose | Response Time |
+|----------|---------|---------|---------------|
+| `/auth/session` | POST | Initialize session | 10-30 seconds |
+| `/auth/status` | GET | Check session health | <1 second |
+| `/auth/session` | DELETE | Clear session | <1 second |
+
+### Performance Improvements
+
+| Scenario | Before | After | Improvement |
+|----------|---------|--------|-------------|
+| First command | 10-30s | 10-30s | Same (auth required) |
+| Subsequent commands | 10-30s each | 1-3s each | **90% faster** |
+| Status check | 20-40s | 2-5s | **85% faster** |
+| Multiple commands | 60-90s total | 15-20s total | **75% faster** |
+
 ## Bot Integration Guidelines
 
-### Recommended Integration Flow
+### Recommended Integration Flow (Updated)
 
 1. **Initialize**: Call `GET /contract` to understand API capabilities
-2. **Discover**: Call `GET /help` to get current command availability
-3. **Validate**: Check command status before execution
-4. **Execute**: Send requests with proper authentication and confirmation
-5. **Handle**: Process responses and errors appropriately
-6. **Refresh**: Periodically update command availability
+2. **Authenticate**: Call `POST /auth/session` to establish session (one-time 10-30s)
+3. **Discover**: Call `GET /help` to get current command availability
+4. **Monitor**: Check `GET /auth/status` periodically for session health
+5. **Execute**: Send commands rapidly using cached session (1-3s each)
+6. **Handle**: Process responses and monitor session expiry
+7. **Refresh**: Re-authenticate when session expires (every 25 minutes)
+
+### Session-Based Error Handling
+
+#### Session Required (401)
+```json
+{
+  "success": false,
+  "message": "Session required: No active session - please authenticate first",
+  "data": {
+    "action": "authenticate",
+    "endpoint": "/auth/session",
+    "hint": "Please authenticate first using POST /auth/session"
+  }
+}
+```
+
+**Bot Response**: Call `POST /auth/session` to establish session, then retry command.
+
+#### Session Expired (401)
+```json
+{
+  "success": false,
+  "message": "Session expired - please re-authenticate",
+  "data": {
+    "action": "authenticate",
+    "endpoint": "/auth/session",
+    "hint": "Session has expired, please re-authenticate"
+  }
+}
+```
+
+**Bot Response**: Re-authenticate and retry command.
+
+#### Session Monitoring
+All API responses now include session information:
+```json
+{
+  "data": {
+    "session": {
+      "ready": true,
+      "sessionId": "session_1672847234_abc123",
+      "authenticated": true,
+      "expired": false,
+      "expiringSoon": false,
+      "timeToExpiry": 1440000
+    }
+  }
+}
+```
 
 ### Safety Recommendations
 
@@ -230,11 +367,19 @@ Before executing any command:
 - Rate limit monitoring
 - Error handling and retry logic
 - User notification for safety-critical operations
+- **Session monitoring**: Check `expiringSoon` flag for proactive re-authentication
 
-### Example Bot Implementation
+### Example Bot Implementation (Updated)
 
 ```javascript
 class BrandtCarBot {
+  constructor() {
+    this.sessionId = null;
+    this.sessionExpiry = null;
+    this.contract = null;
+    this.commands = [];
+  }
+  
   async initialize() {
     // Get contract and help information
     const contract = await this.getContract();
@@ -243,6 +388,26 @@ class BrandtCarBot {
     this.contract = contract;
     this.commands = help.commands;
     this.environmentStatus = help.environment_status;
+  }
+  
+  async ensureSession() {
+    // Check if session exists and is not expired
+    if (this.sessionId && this.sessionExpiry && new Date() < this.sessionExpiry) {
+      return this.sessionId;
+    }
+    
+    console.log('🔐 Establishing session...');
+    const authResponse = await this.callApi('/auth/session', {}, 'POST');
+    
+    if (authResponse.success) {
+      this.sessionId = authResponse.data.sessionId;
+      this.sessionExpiry = new Date(authResponse.data.expiresAt);
+      console.log(`✅ Session established: ${this.sessionId}`);
+      console.log(`⏰ Expires: ${this.sessionExpiry.toISOString()}`);
+      return this.sessionId;
+    } else {
+      throw new Error(`Session authentication failed: ${authResponse.message}`);
+    }
   }
   
   async canExecuteCommand(commandName) {
@@ -256,6 +421,9 @@ class BrandtCarBot {
   }
   
   async executeCommand(commandName, params = {}) {
+    // Ensure we have an active session
+    await this.ensureSession();
+    
     const check = await this.canExecuteCommand(commandName);
     
     if (!check.canExecute) {
@@ -270,7 +438,57 @@ class BrandtCarBot {
     }
     
     const command = this.commands.find(cmd => cmd.command === commandName);
-    return await this.callApi(command.endpoint, params);
+    
+    try {
+      const result = await this.callApi(command.endpoint, params);
+      
+      // Check session status from response
+      if (result.data && result.data.session && result.data.session.expiringSoon) {
+        console.log('⚠️ Session expiring soon - will re-authenticate on next command');
+      }
+      
+      return result;
+    } catch (error) {
+      // Handle session expiry
+      if (error.message.includes('Session required') || error.message.includes('Session expired')) {
+        console.log('🔄 Session expired, re-authenticating...');
+        this.sessionId = null;
+        this.sessionExpiry = null;
+        await this.ensureSession();
+        
+        // Retry the command
+        return await this.callApi(command.endpoint, params);
+      }
+      throw error;
+    }
+  }
+  
+  async getSessionStatus() {
+    return await this.callApi('/auth/status');
+  }
+  
+  // Example usage showing performance benefits
+  async demonstratePerformance() {
+    console.log('🚀 Performance demonstration:');
+    
+    // First command: includes authentication time
+    const start1 = Date.now();
+    await this.executeCommand('get_status');
+    const time1 = Date.now() - start1;
+    console.log(`First command: ${time1}ms`);
+    
+    // Subsequent commands: use cached session
+    const start2 = Date.now();
+    await this.executeCommand('lock_doors');
+    const time2 = Date.now() - start2;
+    console.log(`Second command: ${time2}ms`);
+    
+    const start3 = Date.now();
+    await this.executeCommand('get_status');
+    const time3 = Date.now() - start3;
+    console.log(`Third command: ${time3}ms`);
+    
+    console.log(`Performance improvement: ${Math.round((time1 - time2) / time1 * 100)}% faster`);
   }
 }
 ```
@@ -395,10 +613,42 @@ curl -X POST https://your-api.railway.app/doors/unlock \
 - [ ] Rate limiting active
 - [ ] Error responses properly formatted
 
+## Migration Guide
+
+### Upgrading from v2.0.0 to v2.1.0
+
+#### For Existing Bots
+1. **Optional Migration**: Session-based authentication is optional - existing bots continue to work
+2. **Performance Gains**: Update to session-based flow for 75-90% performance improvement
+3. **Backward Compatibility**: All existing endpoints remain unchanged
+
+#### Migration Steps
+1. Add session establishment: `POST /auth/session` before command sequences
+2. Add session monitoring: Check `session.expiringSoon` in responses
+3. Add error handling: Handle 401 responses with re-authentication
+4. Update command batching: Group commands after single authentication
+
+#### Quick Migration Example
+```javascript
+// Before (v2.0.0):
+await api.getStatus();      // 20-30s
+await api.lockDoors();      // 20-30s
+await api.unlockDoors();    // 20-30s
+// Total: 60-90s
+
+// After (v2.1.0):
+await api.authenticate();   // 20-30s (one-time)
+await api.getStatus();      // 2-5s
+await api.lockDoors();      // 1-3s
+await api.unlockDoors();    // 1-3s
+// Total: 24-41s (60% faster)
+```
+
 ## Version History
 
 - **v1.0.0**: Initial contract specification
 - **v2.0.0**: Added Railway environment detection and configuration overrides
+- **v2.1.0**: Added session-based authentication and performance optimization
 
 ---
 

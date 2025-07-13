@@ -31,6 +31,7 @@ COPY config_manager.js ./
 COPY server.js ./
 COPY onstar.js ./
 COPY database.js ./
+COPY session_manager.js ./
 COPY deps/ ./deps/
 
 # Create necessary directories

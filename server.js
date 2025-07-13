@@ -18,6 +18,9 @@ const _ = require('lodash');
 // Import database module
 const db = require('./database');
 
+// Import session manager
+const sessionManager = require('./session_manager');
+
 // Load configuration
 let config;
 try {
@@ -173,6 +176,27 @@ function logRequest(req, res, next) {
 // Apply request logging
 app.use(logRequest);
 
+// Session monitoring middleware
+app.use((req, res, next) => {
+    // Add session info to all responses
+    const originalSend = res.send;
+    res.send = function(data) {
+        try {
+            const responseData = JSON.parse(data);
+            if (responseData && typeof responseData === 'object' && responseData.data) {
+                // Add session summary to all API responses
+                const sessionSummary = sessionManager.getSessionSummary();
+                responseData.data.session = sessionSummary;
+            }
+            originalSend.call(this, JSON.stringify(responseData));
+        } catch (error) {
+            // If parsing fails, send original data
+            originalSend.call(this, data);
+        }
+    };
+    next();
+});
+
 // Database logging middleware
 app.use(async (req, res, next) => {
     const startTime = Date.now();
@@ -264,7 +288,7 @@ function createResponse(success, message, data = null) {
     };
 }
 
-// Helper function to execute OnStar commands
+// Helper function to execute OnStar commands (legacy - use session manager instead)
 async function executeOnStarCommand(commandFunc, ...args) {
     try {
         const client = createOnStarClient();
@@ -276,6 +300,107 @@ async function executeOnStarCommand(commandFunc, ...args) {
     }
 }
 
+// Helper function to execute OnStar commands with session management
+async function executeSessionCommand(commandName, commandFunc) {
+    try {
+        const result = await sessionManager.executeCommand(commandName, commandFunc);
+        return result;
+    } catch (error) {
+        console.error(`Session command ${commandName} failed:`, error.message);
+        return { success: false, error: error.message };
+    }
+}
+
+// SESSION MANAGEMENT ENDPOINTS
+
+// POST /auth/session - Initialize authentication session
+app.post('/auth/session', authenticateApiKey, async (req, res) => {
+    try {
+        console.log('🔐 Session authentication requested');
+        
+        // Check if authentication is already in progress
+        const currentStatus = sessionManager.getSessionStatus();
+        if (currentStatus.authenticationInProgress) {
+            return res.status(202).json(createResponse(true, 'Authentication already in progress', {
+                sessionId: currentStatus.sessionId,
+                status: 'authenticating',
+                message: 'Please wait for authentication to complete'
+            }));
+        }
+        
+        // Check if session is already active and not expired
+        if (currentStatus.isAuthenticated && !currentStatus.isExpired) {
+            return res.json(createResponse(true, 'Session already active', {
+                sessionId: currentStatus.sessionId,
+                status: 'ready',
+                expiresAt: currentStatus.tokenExpiry,
+                timeToExpiry: currentStatus.timeToExpiry,
+                message: 'Session is already authenticated and ready for commands'
+            }));
+        }
+        
+        // Start authentication
+        const authResult = await sessionManager.authenticate();
+        
+        res.json(createResponse(true, 'Authentication successful', {
+            sessionId: authResult.sessionId,
+            status: 'ready',
+            expiresAt: authResult.expiresAt,
+            vehicleCount: authResult.vehicleCount,
+            message: authResult.message
+        }));
+        
+    } catch (error) {
+        console.error('Session authentication failed:', error);
+        res.status(500).json(createResponse(false, `Session authentication failed: ${error.message}`, {
+            status: 'error',
+            details: error.message
+        }));
+    }
+});
+
+// GET /auth/status - Check session status
+app.get('/auth/status', authenticateApiKey, async (req, res) => {
+    try {
+        const status = sessionManager.getSessionStatus();
+        const summary = sessionManager.getSessionSummary();
+        
+        res.json(createResponse(true, 'Session status retrieved', {
+            session: summary,
+            details: {
+                sessionId: status.sessionId,
+                authenticated: status.isAuthenticated,
+                expired: status.isExpired,
+                expiringSoon: status.isExpiringSoon,
+                authInProgress: status.authenticationInProgress,
+                lastAuthTime: status.lastAuthTime,
+                tokenExpiry: status.tokenExpiry,
+                timeToExpiry: status.timeToExpiry,
+                lastError: status.lastError,
+                vehicleCount: status.vehicleCount,
+                hasStoredTokens: sessionManager.hasStoredTokens()
+            }
+        }));
+    } catch (error) {
+        console.error('Session status check failed:', error);
+        res.status(500).json(createResponse(false, `Session status check failed: ${error.message}`));
+    }
+});
+
+// DELETE /auth/session - Clear session and tokens
+app.delete('/auth/session', authenticateApiKey, async (req, res) => {
+    try {
+        await sessionManager.clearSession();
+        res.json(createResponse(true, 'Session cleared successfully', {
+            status: 'cleared',
+            message: 'Session and tokens have been cleared'
+        }));
+    } catch (error) {
+        console.error('Session clear failed:', error);
+        res.status(500).json(createResponse(false, `Session clear failed: ${error.message}`));
+    }
+});
+
 // Vehicle Control Endpoints
 
 // POST /climate/start
@@ -283,17 +408,28 @@ app.post('/climate/start', authenticateApiKey, checkEndpointEnabled('climate', '
     try {
         const { duration_minutes = 10, force = false, temperature } = req.body;
         
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'climate_start',
             (client) => client.start()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to start climate: ${error}`));
         }
         
         res.json(createResponse(true, 'Climate preconditioning started', {
             duration_minutes,
             command_id: `cmd_${Date.now()}`,
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -346,16 +482,27 @@ app.post('/doors/lock', authenticateApiKey, checkEndpointEnabled('doors', 'lock'
 // POST /doors/unlock
 app.post('/doors/unlock', authenticateApiKey, checkEndpointEnabled('doors', 'unlock'), requireConfirmation('doors_unlock'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'doors_unlock',
             (client) => client.unlockDoor()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to unlock doors: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle doors unlocked', {
             action: 'unlocked',
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -505,30 +652,51 @@ app.post('/alert/cancel', authenticateApiKey, checkEndpointEnabled('alert', 'can
 // GET /status
 app.get('/status', authenticateApiKey, checkEndpointEnabled('status', 'get'), async (req, res) => {
     try {
-        const client = createOnStarClient();
+        const startTime = Date.now();
         
-        // Get diagnostics
-        const diagnosticsResult = await client.diagnostics({
-            diagnosticItem: [
-                'EV BATTERY LEVEL',
-                'EV RANGE',
-                'ODOMETER',
-                'TIRE PRESSURE',
-                'AMBIENT AIR TEMPERATURE',
-                'EV CHARGE STATE',
-                'EV PLUG STATE'
-            ]
-        });
+        // Use session-based command execution for diagnostics
+        const diagnosticsCommand = await executeSessionCommand(
+            'get_diagnostics',
+            (client) => client.diagnostics({
+                diagnosticItem: [
+                    'EV BATTERY LEVEL',
+                    'EV RANGE',
+                    'ODOMETER',
+                    'TIRE PRESSURE',
+                    'AMBIENT AIR TEMPERATURE',
+                    'EV CHARGE STATE',
+                    'EV PLUG STATE'
+                ]
+            })
+        );
         
-        // Get location
-        const locationResult = await client.location();
+        // Use session-based command execution for location
+        const locationCommand = await executeSessionCommand(
+            'get_location',
+            (client) => client.location()
+        );
+        
+        // Check if either command failed due to session issues
+        if (!diagnosticsCommand.success || !locationCommand.success) {
+            const error = diagnosticsCommand.error || locationCommand.error;
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
+            return res.status(500).json(createResponse(false, `Failed to get vehicle status: ${error}`));
+        }
         
         // Parse diagnostics
-        const diagnostics = diagnosticsResult.response.data.commandResponse.body.diagnosticResponse;
+        const diagnostics = diagnosticsCommand.result.response.data.commandResponse.body.diagnosticResponse;
         const vehicleData = parseDiagnostics(diagnostics);
         
         // Parse location
-        const locationData = locationResult.response.data.commandResponse.body;
+        const locationData = locationCommand.result.response.data.commandResponse.body;
+        
+        const totalTime = Date.now() - startTime;
         
         res.json(createResponse(true, 'Vehicle status retrieved', {
             vehicle_data: {
@@ -548,7 +716,9 @@ app.get('/status', authenticateApiKey, checkEndpointEnabled('status', 'get'), as
                     longitude: locationData.longitude,
                     speed_mph: locationData.speed || 0
                 }
-            }
+            },
+            execution_time_ms: totalTime,
+            commands_executed: ['get_diagnostics', 'get_location']
         }));
     } catch (error) {
         console.error('Status retrieval failed:', error);
