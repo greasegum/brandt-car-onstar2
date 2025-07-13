@@ -161,6 +161,17 @@ Authorization: Bearer {api_key}
 | `get_help` | `GET /help` | Not required |
 | `get_contract` | `GET /contract` | Required |
 | `reload_config` | `POST /config/reload` | Required |
+| `health_check` | `GET /health` | Not required |
+
+### 6. Debug Commands (Development)
+**Safety Level**: `safe`
+**Authentication**: Varies
+**Confirmation**: Not required
+
+| Command | Endpoint | Authentication | Purpose |
+|---------|----------|----------------|---------|
+| `debug_chrome` | `GET /debug/chrome` | Not required | Check Chrome/Playwright installation |
+| `test_auth` | `POST /debug/test-auth` | Required | Test OnStar authentication |
 
 ## Safety Contract
 
@@ -602,6 +613,13 @@ curl -X POST https://your-api.railway.app/doors/unlock \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"confirm": true}'
+
+# Debug Chrome installation
+curl -X GET https://your-api.railway.app/debug/chrome
+
+# Test authentication
+curl -X POST https://your-api.railway.app/debug/test-auth \
+  -H "Authorization: Bearer your-api-key"
 ```
 
 ### Validation Checklist
@@ -612,6 +630,8 @@ curl -X POST https://your-api.railway.app/doors/unlock \
 - [ ] Confirmation requirements working
 - [ ] Rate limiting active
 - [ ] Error responses properly formatted
+- [ ] Chrome/Playwright installation verified
+- [ ] Authentication test passes
 
 ## Migration Guide
 

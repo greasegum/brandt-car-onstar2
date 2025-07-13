@@ -1034,6 +1034,100 @@ app.get('/health', checkEndpointEnabled('system', 'health'), async (req, res) =>
     }
 });
 
+// GET /debug/chrome - Debug Chrome/Playwright installation
+app.get('/debug/chrome', async (req, res) => {
+    try {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        const debugInfo = {
+            environment: {
+                NODE_ENV: process.env.NODE_ENV,
+                PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD,
+                PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+                PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
+                DISPLAY: process.env.DISPLAY
+            },
+            chrome_checks: {}
+        };
+        
+        // Check for Chrome/Chromium installations
+        try {
+            const { stdout: chromeVersion } = await execAsync('google-chrome --version');
+            debugInfo.chrome_checks.google_chrome = {
+                found: true,
+                version: chromeVersion.trim()
+            };
+        } catch (error) {
+            debugInfo.chrome_checks.google_chrome = {
+                found: false,
+                error: error.message
+            };
+        }
+        
+        try {
+            const { stdout: chromiumVersion } = await execAsync('chromium-browser --version');
+            debugInfo.chrome_checks.chromium_browser = {
+                found: true,
+                version: chromiumVersion.trim()
+            };
+        } catch (error) {
+            debugInfo.chrome_checks.chromium_browser = {
+                found: false,
+                error: error.message
+            };
+        }
+        
+        // Check Playwright installation
+        try {
+            const { stdout: playwrightInfo } = await execAsync('npx playwright --version');
+            debugInfo.chrome_checks.playwright = {
+                found: true,
+                version: playwrightInfo.trim()
+            };
+        } catch (error) {
+            debugInfo.chrome_checks.playwright = {
+                found: false,
+                error: error.message
+            };
+        }
+        
+        res.json(createResponse(true, 'Chrome/Playwright debug information', debugInfo));
+        
+    } catch (error) {
+        console.error('Chrome debug failed:', error);
+        res.status(500).json(createResponse(false, 'Chrome debug failed', {
+            error: error.message
+        }));
+    }
+});
+
+// POST /debug/test-auth - Test authentication specifically
+app.post('/debug/test-auth', authenticateApiKey, async (req, res) => {
+    try {
+        console.log('🔍 Testing authentication with OnStar...');
+        
+        const authResult = await sessionManager.authenticate();
+        
+        res.json(createResponse(true, 'Authentication test completed', {
+            success: true,
+            sessionId: authResult.sessionId,
+            expiresAt: authResult.expiresAt,
+            vehicleCount: authResult.vehicleCount,
+            message: 'Authentication successful - Chrome/Playwright is working correctly'
+        }));
+        
+    } catch (error) {
+        console.error('❌ Authentication test failed:', error);
+        res.status(500).json(createResponse(false, 'Authentication test failed', {
+            error: error.message,
+            details: 'This indicates a Chrome/Playwright configuration issue',
+            suggestion: 'Check /debug/chrome endpoint for installation status'
+        }));
+    }
+});
+
 // GET /capabilities
 app.get('/capabilities', authenticateApiKey, checkEndpointEnabled('system', 'capabilities'), async (req, res) => {
     res.json(createResponse(true, 'Vehicle capabilities retrieved', {

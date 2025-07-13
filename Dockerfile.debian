@@ -1,45 +1,37 @@
-FROM node:18-alpine
+FROM node:18-slim
 
 WORKDIR /app
 
 # Install system dependencies for Playwright/OnStar
-RUN apk add --no-cache \
-    curl \
-    chromium \
-    nss \
-    freetype \
-    freetype-dev \
-    harfbuzz \
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
     ca-certificates \
-    ttf-freefont \
-    libstdc++ \
-    libgcc \
-    libx11 \
-    libxcomposite \
-    libxcursor \
-    libxdamage \
-    libxext \
-    libxfixes \
-    libxi \
-    libxrandr \
-    libxrender \
-    libxss \
-    libxtst \
-    alsa-lib \
-    atk \
-    cups-libs \
-    gtk+3.0 \
-    ipa-gothic-fonts \
-    xorg-fonts-100dpi \
-    xorg-fonts-75dpi \
-    xorg-fonts-cyrillic \
-    xorg-fonts-misc \
-    xorg-fonts-type1 \
-    xvfb
+    procps \
+    libxss1 \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libasound2 \
+    libxrandr2 \
+    libgbm1 \
+    libxss1 \
+    libasound2 \
+    fonts-liberation \
+    libappindicator3-1 \
+    libdrm2 \
+    libxshmfence1 \
+    xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set Playwright to use system Chromium
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Install Google Chrome
+RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy package files
 COPY package*.json ./
@@ -47,8 +39,8 @@ COPY package*.json ./
 # Install dependencies
 RUN npm ci --only=production
 
-# Configure Playwright to use system Chromium
-RUN npx playwright install-deps chromium
+# Install Playwright browsers
+RUN npx playwright install chromium
 
 # Copy configuration files
 COPY config.json ./
@@ -73,7 +65,7 @@ ENV NODE_ENV=production
 ENV ONSTAR_TOKEN_LOCATION=/app/tokens/
 
 # Playwright environment variables
-ENV PLAYWRIGHT_BROWSERS_PATH=/usr/bin
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV DISPLAY=:99
 
 # Health check
