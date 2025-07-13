@@ -1115,7 +1115,8 @@ app.post('/debug/test-auth', authenticateApiKey, async (req, res) => {
             sessionId: authResult.sessionId,
             expiresAt: authResult.expiresAt,
             vehicleCount: authResult.vehicleCount,
-            message: 'Authentication successful - Chrome/Playwright is working correctly'
+            message: 'Authentication successful - Chrome/Playwright is working correctly',
+            reused: authResult.reused || false
         }));
         
     } catch (error) {
@@ -1124,6 +1125,31 @@ app.post('/debug/test-auth', authenticateApiKey, async (req, res) => {
             error: error.message,
             details: 'This indicates a Chrome/Playwright configuration issue',
             suggestion: 'Check /debug/chrome endpoint for installation status'
+        }));
+    }
+});
+
+// POST /auth/force - Force re-authentication (bypasses session check)
+app.post('/auth/force', authenticateApiKey, async (req, res) => {
+    try {
+        console.log('🔄 Force re-authentication requested');
+        
+        const authResult = await sessionManager.forceReauthenticate();
+        
+        res.json(createResponse(true, 'Force re-authentication completed', {
+            success: true,
+            sessionId: authResult.sessionId,
+            expiresAt: authResult.expiresAt,
+            vehicleCount: authResult.vehicleCount,
+            message: 'Session refreshed with new authentication',
+            forced: true
+        }));
+        
+    } catch (error) {
+        console.error('❌ Force re-authentication failed:', error);
+        res.status(500).json(createResponse(false, 'Force re-authentication failed', {
+            error: error.message,
+            details: 'Failed to force re-authentication'
         }));
     }
 });

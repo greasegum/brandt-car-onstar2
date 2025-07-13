@@ -26,8 +26,24 @@ class SessionManager {
      * Initialize a new authentication session
      */
     async authenticate() {
+        // Check if we already have an active session
+        const status = this.getSessionStatus();
+        
+        if (status.isAuthenticated && !status.isExpired && !status.isExpiringSoon) {
+            console.log('ℹ️ Session already active, returning existing session');
+            return {
+                success: true,
+                sessionId: this.sessionState.sessionId,
+                expiresAt: this.sessionState.tokenExpiry,
+                vehicleCount: this.sessionState.vehicleCount,
+                message: 'Session already active - no authentication needed',
+                reused: true
+            };
+        }
+
         // Prevent multiple concurrent authentications
         if (this.authPromise) {
+            console.log('⏳ Authentication already in progress, waiting...');
             return this.authPromise;
         }
 
@@ -200,6 +216,19 @@ class SessionManager {
         const gmTokenPath = path.join(this.tokenLocation, 'gm_tokens.json');
         
         return fs.existsSync(msTokenPath) && fs.existsSync(gmTokenPath);
+    }
+
+    /**
+     * Force re-authentication (bypasses session check)
+     */
+    async forceReauthenticate() {
+        console.log('🔄 Force re-authentication requested');
+        
+        // Clear current session
+        await this.clearSession();
+        
+        // Perform fresh authentication
+        return this.authenticate();
     }
 
     /**
