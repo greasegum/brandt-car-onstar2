@@ -25,11 +25,8 @@ RUN apk add --no-cache \
     libxrender \
     libxtst \
     alsa-lib \
-    atk \
     cups-libs \
-    gtk+3 \
     fontconfig \
-    liberation-fonts \
     xvfb
 
 # Set Playwright to use system Chromium
