@@ -23,18 +23,13 @@ RUN apk add --no-cache \
     libxi \
     libxrandr \
     libxrender \
-    libxss \
     libxtst \
     alsa-lib \
     atk \
     cups-libs \
-    gtk+3.0 \
-    ipa-gothic-fonts \
-    xorg-fonts-100dpi \
-    xorg-fonts-75dpi \
-    xorg-fonts-cyrillic \
-    xorg-fonts-misc \
-    xorg-fonts-type1 \
+    gtk+3 \
+    fontconfig \
+    liberation-fonts \
     xvfb
 
 # Set Playwright to use system Chromium
