@@ -1,9 +1,15 @@
-node_modules
-.nyc_output
-.bak
+# Dependencies
+node_modules/
+
+# Environment files
 .env
 .secrets
-temp-browser-profile/
+
+# Token files
 *_tokens.json
+
+# Logs
 *.log
+
+# Temporary files
 *.tmp

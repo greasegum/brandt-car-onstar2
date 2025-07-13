@@ -260,23 +260,7 @@ function requiresConfirmation(path) {
     return path.includes('unlock') || path.startsWith('/alert') || path.startsWith('/charging');
 }
 
-// Create OnStar client
-function createOnStarClient() {
-    const config = {
-        username: process.env.ONSTAR_USERNAME,
-        password: process.env.ONSTAR_PASSWORD,
-        vin: process.env.ONSTAR_VIN,
-        onStarTOTP: process.env.ONSTAR_TOTP_SECRET,
-        onStarPin: process.env.ONSTAR_PIN,
-        deviceId: process.env.ONSTAR_DEVICEID,
-        tokenLocation: process.env.ONSTAR_TOKEN_LOCATION || './tokens/',
-        checkRequestStatus: true,
-        requestPollingTimeoutSeconds: 120,
-        requestPollingIntervalSeconds: 10
-    };
-    
-    return OnStar.create(config);
-}
+
 
 // Helper function for API responses
 function createResponse(success, message, data = null) {
@@ -288,17 +272,7 @@ function createResponse(success, message, data = null) {
     };
 }
 
-// Helper function to execute OnStar commands (legacy - use session manager instead)
-async function executeOnStarCommand(commandFunc, ...args) {
-    try {
-        const client = createOnStarClient();
-        const result = await commandFunc(client, ...args);
-        return { success: true, result };
-    } catch (error) {
-        console.error('OnStar command failed:', error.message);
-        return { success: false, error: error.message };
-    }
-}
+
 
 // Helper function to execute OnStar commands with session management
 async function executeSessionCommand(commandName, commandFunc) {
@@ -441,15 +415,26 @@ app.post('/climate/start', authenticateApiKey, checkEndpointEnabled('climate', '
 // POST /climate/stop
 app.post('/climate/stop', authenticateApiKey, checkEndpointEnabled('climate', 'stop'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'climate_stop',
             (client) => client.cancelStart()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to stop climate: ${error}`));
         }
         
         res.json(createResponse(true, 'Climate preconditioning stopped', {
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -461,16 +446,27 @@ app.post('/climate/stop', authenticateApiKey, checkEndpointEnabled('climate', 's
 // POST /doors/lock
 app.post('/doors/lock', authenticateApiKey, checkEndpointEnabled('doors', 'lock'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'doors_lock',
             (client) => client.lockDoor()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to lock doors: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle doors locked', {
             action: 'locked',
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -514,16 +510,27 @@ app.post('/doors/unlock', authenticateApiKey, checkEndpointEnabled('doors', 'unl
 // POST /trunk/lock
 app.post('/trunk/lock', authenticateApiKey, checkEndpointEnabled('trunk', 'lock'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'trunk_lock',
             (client) => client.lockTrunk()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to lock trunk: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle trunk locked', {
             action: 'trunk_locked',
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -535,16 +542,27 @@ app.post('/trunk/lock', authenticateApiKey, checkEndpointEnabled('trunk', 'lock'
 // POST /trunk/unlock
 app.post('/trunk/unlock', authenticateApiKey, checkEndpointEnabled('trunk', 'unlock'), requireConfirmation('trunk_unlock'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'trunk_unlock',
             (client) => client.unlockTrunk()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to unlock trunk: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle trunk unlocked', {
             action: 'trunk_unlocked',
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -558,7 +576,9 @@ app.post('/alert/lights', authenticateApiKey, checkEndpointEnabled('alert', 'lig
     try {
         const { duration_seconds = 30 } = req.body;
         
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'alert_lights',
             (client) => client.alert({
                 action: ['Flash'],
                 duration: duration_seconds
@@ -566,11 +586,20 @@ app.post('/alert/lights', authenticateApiKey, checkEndpointEnabled('alert', 'lig
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to activate lights: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle lights activated', {
             duration_seconds,
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -582,17 +611,28 @@ app.post('/alert/lights', authenticateApiKey, checkEndpointEnabled('alert', 'lig
 // POST /alert/horn
 app.post('/alert/horn', authenticateApiKey, checkEndpointEnabled('alert', 'horn'), requireConfirmation('alert_horn'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'alert_horn',
             (client) => client.alert({
                 action: ['Honk']
             })
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to activate horn: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle horn activated', {
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -606,7 +646,9 @@ app.post('/alert/both', authenticateApiKey, checkEndpointEnabled('alert', 'both'
     try {
         const { duration_seconds = 30 } = req.body;
         
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'alert_both',
             (client) => client.alert({
                 action: ['Flash', 'Honk'],
                 duration: duration_seconds
@@ -614,11 +656,20 @@ app.post('/alert/both', authenticateApiKey, checkEndpointEnabled('alert', 'both'
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to activate alerts: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle lights and horn activated', {
             duration_seconds,
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -630,15 +681,26 @@ app.post('/alert/both', authenticateApiKey, checkEndpointEnabled('alert', 'both'
 // POST /alert/cancel
 app.post('/alert/cancel', authenticateApiKey, checkEndpointEnabled('alert', 'cancel'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'alert_cancel',
             (client) => client.cancelAlert()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to cancel alerts: ${error}`));
         }
         
         res.json(createResponse(true, 'Vehicle alerts cancelled', {
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -729,11 +791,21 @@ app.get('/status', authenticateApiKey, checkEndpointEnabled('status', 'get'), as
 // GET /location
 app.get('/location', authenticateApiKey, checkEndpointEnabled('location', 'get'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'get_location',
             (client) => client.location()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to get location: ${error}`));
         }
         
@@ -746,7 +818,8 @@ app.get('/location', authenticateApiKey, checkEndpointEnabled('location', 'get')
                 accuracy_meters: 10,
                 speed_mph: location.speed || 0,
                 heading: location.heading || 0
-            }
+            },
+            execution_time_ms: executionTime
         }));
     } catch (error) {
         console.error('Location retrieval failed:', error);
@@ -757,11 +830,21 @@ app.get('/location', authenticateApiKey, checkEndpointEnabled('location', 'get')
 // GET /diagnostics
 app.get('/diagnostics', authenticateApiKey, checkEndpointEnabled('diagnostics', 'get'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'get_diagnostics',
             (client) => client.diagnostics()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to get diagnostics: ${error}`));
         }
         
@@ -769,7 +852,8 @@ app.get('/diagnostics', authenticateApiKey, checkEndpointEnabled('diagnostics', 
         const vehicleData = parseDiagnostics(diagnostics);
         
         res.json(createResponse(true, 'Vehicle diagnostics retrieved', {
-            diagnostics: vehicleData
+            diagnostics: vehicleData,
+            execution_time_ms: executionTime
         }));
     } catch (error) {
         console.error('Diagnostics retrieval failed:', error);
@@ -782,15 +866,26 @@ app.get('/diagnostics', authenticateApiKey, checkEndpointEnabled('diagnostics', 
 // POST /charging/start
 app.post('/charging/start', authenticateApiKey, checkEndpointEnabled('charging', 'start'), requireConfirmation('charging_start'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'charging_start',
             (client) => client.chargeOverride({ mode: 'CHARGE_NOW' })
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to start charging: ${error}`));
         }
         
         res.json(createResponse(true, 'Charging started', {
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -802,15 +897,26 @@ app.post('/charging/start', authenticateApiKey, checkEndpointEnabled('charging',
 // POST /charging/stop
 app.post('/charging/stop', authenticateApiKey, checkEndpointEnabled('charging', 'stop'), requireConfirmation('charging_stop'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'charging_stop',
             (client) => client.chargeOverride({ mode: 'STOP_CHARGING' })
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to stop charging: ${error}`));
         }
         
         res.json(createResponse(true, 'Charging stopped', {
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -822,18 +928,29 @@ app.post('/charging/stop', authenticateApiKey, checkEndpointEnabled('charging', 
 // GET /charging/profile
 app.get('/charging/profile', authenticateApiKey, checkEndpointEnabled('charging', 'profile_get'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'get_charging_profile',
             (client) => client.getChargingProfile()
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to get charge profile: ${error}`));
         }
         
         const profile = result.response.data.commandResponse.body;
         
         res.json(createResponse(true, 'Charging profile retrieved', {
-            profile
+            profile,
+            execution_time_ms: executionTime
         }));
     } catch (error) {
         console.error('Get charge profile failed:', error);
@@ -846,7 +963,9 @@ app.post('/charging/profile', authenticateApiKey, checkEndpointEnabled('charging
     try {
         const { scheduled_start = '23:00', target_level = 90, rate_limit = 'normal' } = req.body;
         
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'set_charging_profile',
             (client) => client.setChargingProfile({
                 chargeMode: 'SCHEDULED',
                 rateType: rate_limit.toUpperCase()
@@ -854,6 +973,14 @@ app.post('/charging/profile', authenticateApiKey, checkEndpointEnabled('charging
         );
         
         if (!success) {
+            // Check if error is due to session issues
+            if (error.includes('session') || error.includes('authenticate')) {
+                return res.status(401).json(createResponse(false, `Session required: ${error}`, {
+                    action: 'authenticate',
+                    endpoint: '/auth/session',
+                    hint: 'Please authenticate first using POST /auth/session'
+                }));
+            }
             return res.status(500).json(createResponse(false, `Failed to set charge profile: ${error}`));
         }
         
@@ -861,6 +988,7 @@ app.post('/charging/profile', authenticateApiKey, checkEndpointEnabled('charging
             scheduled_start,
             target_level,
             rate_limit,
+            execution_time_ms: executionTime,
             status: result.response.data.commandResponse.status
         }));
     } catch (error) {
@@ -874,7 +1002,9 @@ app.post('/charging/profile', authenticateApiKey, checkEndpointEnabled('charging
 // GET /health
 app.get('/health', checkEndpointEnabled('system', 'health'), async (req, res) => {
     try {
-        const { success, result, error } = await executeOnStarCommand(
+        // Use session-based command execution
+        const { success, result, error, executionTime } = await executeSessionCommand(
+            'health_check',
             (client) => client.getAccountVehicles()
         );
         
@@ -882,11 +1012,12 @@ app.get('/health', checkEndpointEnabled('system', 'health'), async (req, res) =>
             res.json(createResponse(true, 'System healthy', {
                 status: 'healthy',
                 service: 'brandt-car-api-v2',
-                version: '2.0.0',
+                version: '2.1.0',
                 onstar_connection: {
                     authenticated: true,
                     last_successful_call: new Date().toISOString()
-                }
+                },
+                execution_time_ms: executionTime
             }));
         } else {
             res.json(createResponse(false, 'System unhealthy', {
