@@ -172,6 +172,7 @@ Authorization: Bearer {api_key}
 |---------|----------|----------------|---------|
 | `debug_chrome` | `GET /debug/chrome` | Not required | Check Chrome/Playwright installation |
 | `test_auth` | `POST /debug/test-auth` | Required | Test OnStar authentication |
+| `force_auth` | `POST /auth/force` | Required | Force re-authentication |
 
 ## Safety Contract
 
@@ -289,6 +290,7 @@ curl -X GET https://your-api.railway.app/auth/status \
 |----------|---------|---------|---------------|
 | `/auth/session` | POST | Initialize session | 10-30 seconds |
 | `/auth/status` | GET | Check session health | <1 second |
+| `/auth/force` | POST | Force re-authentication | 10-30 seconds |
 | `/auth/session` | DELETE | Clear session | <1 second |
 
 ### Performance Improvements
@@ -344,6 +346,22 @@ curl -X GET https://your-api.railway.app/auth/status \
 
 **Bot Response**: Re-authenticate and retry command.
 
+#### Session Already Active (200)
+```json
+{
+  "success": true,
+  "message": "Session already active - no authentication needed",
+  "data": {
+    "sessionId": "session_1672847234_abc123",
+    "expiresAt": "2025-01-04T11:00:00.000Z",
+    "vehicleCount": 1,
+    "reused": true
+  }
+}
+```
+
+**Bot Response**: Use existing session - no action needed.
+
 #### Session Monitoring
 All API responses now include session information:
 ```json
@@ -379,6 +397,7 @@ All API responses now include session information:
 - Error handling and retry logic
 - User notification for safety-critical operations
 - **Session monitoring**: Check `expiringSoon` flag for proactive re-authentication
+- **Session protection**: Avoid unnecessary re-authentication to prevent rate limiting
 
 ### Example Bot Implementation (Updated)
 
@@ -413,7 +432,12 @@ class BrandtCarBot {
     if (authResponse.success) {
       this.sessionId = authResponse.data.sessionId;
       this.sessionExpiry = new Date(authResponse.data.expiresAt);
-      console.log(`✅ Session established: ${this.sessionId}`);
+      
+      if (authResponse.data.reused) {
+        console.log(`ℹ️ Session reused: ${this.sessionId}`);
+      } else {
+        console.log(`✅ Session established: ${this.sessionId}`);
+      }
       console.log(`⏰ Expires: ${this.sessionExpiry.toISOString()}`);
       return this.sessionId;
     } else {
@@ -620,6 +644,10 @@ curl -X GET https://your-api.railway.app/debug/chrome
 # Test authentication
 curl -X POST https://your-api.railway.app/debug/test-auth \
   -H "Authorization: Bearer your-api-key"
+
+# Force re-authentication (bypasses session check)
+curl -X POST https://your-api.railway.app/auth/force \
+  -H "Authorization: Bearer your-api-key"
 ```
 
 ### Validation Checklist
@@ -632,6 +660,8 @@ curl -X POST https://your-api.railway.app/debug/test-auth \
 - [ ] Error responses properly formatted
 - [ ] Chrome/Playwright installation verified
 - [ ] Authentication test passes
+- [ ] Session protection working (no unnecessary re-auth)
+- [ ] Force re-authentication endpoint functional
 
 ## Migration Guide
 
@@ -669,6 +699,7 @@ await api.unlockDoors();    // 1-3s
 - **v1.0.0**: Initial contract specification
 - **v2.0.0**: Added Railway environment detection and configuration overrides
 - **v2.1.0**: Added session-based authentication and performance optimization
+- **v2.2.0**: Added session protection and rate limiting improvements
 
 ---
 

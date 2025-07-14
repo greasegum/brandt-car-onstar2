@@ -68,7 +68,7 @@ curl -X POST https://your-api.railway.app/debug/test-auth \
   -H "Authorization: Bearer brandt-car-boltaire-2025"
 ```
 
-**Expected Response:**
+**Expected Response (First Time):**
 ```json
 {
   "success": true,
@@ -77,7 +77,23 @@ curl -X POST https://your-api.railway.app/debug/test-auth \
     "sessionId": "session_1234567890_abc123",
     "expiresAt": "2025-01-04T11:00:00.000Z",
     "vehicleCount": 1,
-    "message": "Authentication successful - Chrome/Playwright is working correctly"
+    "message": "Authentication successful - Chrome/Playwright is working correctly",
+    "reused": false
+  }
+}
+```
+
+**Expected Response (Session Already Active):**
+```json
+{
+  "success": true,
+  "data": {
+    "success": true,
+    "sessionId": "session_1234567890_abc123",
+    "expiresAt": "2025-01-04T11:00:00.000Z",
+    "vehicleCount": 1,
+    "message": "Session already active - no authentication needed",
+    "reused": true
   }
 }
 ```
@@ -106,6 +122,23 @@ curl -X POST https://your-api.railway.app/debug/test-auth \
 - Check OnStar credentials in environment variables
 - Verify network connectivity to OnStar
 - Check if OnStar account is active
+
+**If session is already active:**
+- You'll see `"reused": true` in the response
+- This is normal and indicates session protection is working
+- No additional authentication is needed
+
+### Step 3: Test Force Re-authentication (Optional)
+```bash
+# Force re-authentication (bypasses session check)
+curl -X POST https://your-api.railway.app/auth/force \
+  -H "Authorization: Bearer brandt-car-boltaire-2025"
+```
+
+**Use this when:**
+- You need to refresh the session
+- Troubleshooting authentication issues
+- Testing rate limiting behavior
 
 ### Step 3: Check Environment Variables
 Ensure these environment variables are set in Railway:
@@ -160,11 +193,15 @@ Monitor the application logs for:
 - Session tokens generated
 - Car commands returning data instead of errors
 - Reduced authentication time (session reuse working)
+- Session protection working (`reused: true` on subsequent auth calls)
+- Rate limiting protection active
 
 ### Log Patterns to Watch
 - `Car session authentication successful`
 - `Session token generated`
 - `Car command executed successfully`
+- `ℹ️ Session already active, returning existing session`
+- `🔄 Force re-authentication requested`
 
 ## Support
 

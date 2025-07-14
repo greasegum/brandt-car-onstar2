@@ -56,6 +56,7 @@ Based on BigThunderSR's proven implementation:
 3. **Privilege Escalation**: PIN upgrade for remote commands
 4. **Token Management**: Automatic refresh with 30-minute cache
 5. **Rate Limiting**: 30-minute minimum intervals (OnStar restriction)
+6. **Session Protection**: Prevents unnecessary re-authentication to avoid rate limiting
 
 ### **Credential Storage**
 ```python
@@ -237,6 +238,55 @@ Response: {
     }
   },
   "timestamp": "2025-07-10T10:30:00Z"
+}
+```
+
+### **Session Management**
+
+#### `POST /auth/session`
+**Initialize or reuse session**
+```json
+Response: {
+  "success": true,
+  "message": "Session already active - no authentication needed",
+  "data": {
+    "sessionId": "session_1672847234_abc123",
+    "expiresAt": "2025-01-04T11:00:00.000Z",
+    "vehicleCount": 1,
+    "reused": true
+  }
+}
+```
+
+#### `POST /auth/force`
+**Force re-authentication (bypasses session check)**
+```json
+Response: {
+  "success": true,
+  "message": "Session refreshed with new authentication",
+  "data": {
+    "sessionId": "session_1672847235_def456",
+    "expiresAt": "2025-01-04T11:25:00.000Z",
+    "vehicleCount": 1,
+    "forced": true
+  }
+}
+```
+
+#### `GET /auth/status`
+**Check session health**
+```json
+Response: {
+  "success": true,
+  "data": {
+    "session": {
+      "ready": true,
+      "authenticated": true,
+      "expired": false,
+      "expiringSoon": false,
+      "timeToExpiry": 1440000
+    }
+  }
 }
 ```
 
